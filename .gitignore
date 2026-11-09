@@ -2,3 +2,4 @@ session.txt
 debug/
 recon/
 __pycache__/
+session_state/
