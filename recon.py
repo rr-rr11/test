@@ -61,6 +61,8 @@ try:
     """)
     (OUT / "choose_game_elements.json").write_text(json.dumps(items, ensure_ascii=False, indent=1))
     links = sorted({i["href"] for i in items if i["href"] and "/game/" in i["href"]})
+    links = [u for u in links if not any(x in u for x in ("market", "season", "#"))
+             and not u.rstrip("/").endswith("choose_game")]
     print("game links:", *links, sep="\n  ")
 
     for i, url in enumerate(links):
@@ -78,5 +80,48 @@ try:
         (OUT / f"game_{i}.json").write_text(json.dumps({"info": info, "requests": urls},
                                                         ensure_ascii=False, indent=1))
         print(i, info["url"], info["canvases"])
+    # ---- روی هر دکمه START در کارت‌های بازی کلیک می‌کنیم و نتیجه را ثبت می‌کنیم ----
+    START_XP = "//button[contains(translate(normalize-space(.),'start','START'),'START')]"
+    GAMES = "https://rollercoin.com/game/choose_game"
+    d.get(GAMES); time.sleep(10)
+    total = len(d.find_elements(By.XPATH, START_XP))
+    print("START buttons:", total)
+    for i in range(total):
+        d.get(GAMES); time.sleep(8)
+        btns = d.find_elements(By.XPATH, START_XP)
+        if i >= len(btns):
+            break
+        b = btns[i]
+        card = d.execute_script(
+            "let e=arguments[0];for(let k=0;k<4&&e.parentElement;k++){e=e.parentElement;}"
+            "return e.innerText.slice(0,200);", b)
+        d.execute_script("arguments[0].scrollIntoView({block:'center'});", b)
+        d.get_log("performance")          # پاک کردن لاگ قبلی
+        main = d.current_window_handle
+        try:
+            b.click()
+        except Exception:
+            d.execute_script("arguments[0].click();", b)
+        time.sleep(10)
+        if len(d.window_handles) > 1:
+            d.switch_to.window(d.window_handles[-1])
+        dump(f"start_{i}")
+        info = d.execute_script("""
+          return {url:location.href, title:document.title,
+            canvases:[...document.querySelectorAll('canvas')].map(c=>({w:c.width,h:c.height,cls:c.className})),
+            iframes:[...document.querySelectorAll('iframe')].map(f=>f.src),
+            buttons:[...document.querySelectorAll('button')].map(x=>(x.innerText||'').trim()).filter(Boolean)};
+        """)
+        info["card"] = card
+        net = [json.loads(l["message"])["message"] for l in d.get_log("performance")]
+        urls = sorted({m["params"]["request"]["url"] for m in net
+                       if m.get("method") == "Network.requestWillBeSent"})
+        (OUT / f"start_{i}.json").write_text(
+            json.dumps({"info": info, "requests": urls}, ensure_ascii=False, indent=1))
+        print(i, repr(card.replace("\n", " | ")[:60]), "->", info["url"], info["canvases"])
+        if len(d.window_handles) > 1:
+            d.close()
+            d.switch_to.window(main)
+
 finally:
     pause("Enter برای بستن مرورگر..."); d.quit()
