@@ -101,7 +101,24 @@ try:
     total = open_games("first")
     dump("games_page")
     print("START buttons:", total)
-    for i in range(total):
+
+    def card_text(b):
+        return d.execute_script(
+            "let e=arguments[0];for(let k=0;k<4&&e.parentElement;k++){e=e.parentElement;}"
+            "return e.innerText.slice(0,200);", b)
+
+    def card_name(t):
+        lines = [x.strip() for x in t.split("\n") if x.strip()]
+        return next((x for x in lines if x.upper() not in ("NEW", "HOT", "COMMUNITY")), "?")
+
+    seen, todo = set(), []
+    for i, b in enumerate(d.find_elements(By.XPATH, START_XP)):
+        n = card_name(card_text(b))
+        if n in seen or n.lower().startswith("coming soon"):
+            continue
+        seen.add(n); todo.append(i)
+    print("games to inspect:", len(todo), sorted(seen))
+    for i in todo:
         open_games(f"game{i}")
         btns = d.find_elements(By.XPATH, START_XP)
         if i >= len(btns):
@@ -125,9 +142,13 @@ try:
           return {url:location.href, title:document.title,
             canvases:[...document.querySelectorAll('canvas')].map(c=>({w:c.width,h:c.height,cls:c.className})),
             iframes:[...document.querySelectorAll('iframe')].map(f=>f.src),
-            buttons:[...document.querySelectorAll('button')].map(x=>(x.innerText||'').trim()).filter(Boolean)};
+            buttons:[...document.querySelectorAll('button')].map(x=>(x.innerText||'').trim()).filter(Boolean),
+            globals:(()=>{const f=document.createElement('iframe');document.body.appendChild(f);
+              const base=new Set(Object.getOwnPropertyNames(f.contentWindow));f.remove();
+              return Object.getOwnPropertyNames(window).filter(k=>!base.has(k)).slice(0,300);})()};
         """)
         info["card"] = card
+        info["name"] = card_name(card)
         net = [json.loads(l["message"])["message"] for l in d.get_log("performance")]
         urls = sorted({m["params"]["request"]["url"] for m in net
                        if m.get("method") == "Network.requestWillBeSent"})
