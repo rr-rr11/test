@@ -28,9 +28,33 @@ for a in ("--no-sandbox", "--disable-dev-shm-usage", "--window-size=1600,1000"):
     opts.add_argument(a)
 d = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
 
+
+JS_FIND = r"""
+function isGame(v) {
+  try { return v && typeof v === 'object' && v.scene && v.scene.scenes && v.canvas && v.config; }
+  catch (e) { return false; }
+}
+let g = null, via = null;
+try { if (window.Phaser && Phaser.GAMES && Phaser.GAMES.length) { g = Phaser.GAMES[0]; via = 'Phaser.GAMES'; } } catch (e) {}
+if (!g) {
+  for (const k of Object.getOwnPropertyNames(window)) {
+    try { const v = window[k]; if (isGame(v)) { g = v; via = 'window.' + k; break; } } catch (e) {}
+  }
+}
+window.__rcgame = g;
+const cv = document.querySelector('canvas');
+const r = cv ? cv.getBoundingClientRect() : null;
+return {found: !!g, via,
+        phaserVersion: window.Phaser ? (Phaser.VERSION || null) : null,
+        gamesLen: (window.Phaser && Phaser.GAMES) ? Phaser.GAMES.length : null,
+        phaserKeys: window.Phaser ? Object.keys(Phaser).slice(0, 60) : null,
+        canvasRect: r ? [r.left, r.top, r.width, r.height] : null,
+        canvasSize: cv ? [cv.width, cv.height] : null};
+"""
+
 JS_DUMP = r"""
-const g = (window.Phaser && Phaser.GAMES && Phaser.GAMES[0]) || null;
-if (!g) return {error: 'no Phaser.GAMES[0]'};
+const g = window.__rcgame || null;
+if (!g) return {error: 'game instance not found'};
 const STD = new Set(['sys','game','anims','cache','registry','sound','textures','events','cameras','add','make',
   'scene','children','lights','data','input','load','time','tweens','physics','matter','scale','plugins',
   'renderer','displayList','updateList','scenePlugin']);
@@ -96,27 +120,31 @@ def dump(name):
 
 
 def dismiss_overlays():
-    for xp in ("//button[normalize-space()='ALLOW SELECTION']",
-               "//button[normalize-space()=\"Don't allow\"]"):
-        for b in d.find_elements(By.XPATH, xp):
-            try:
-                d.execute_script("arguments[0].click();", b)
-            except Exception:
-                pass
-    time.sleep(1)
+    d.execute_script("""
+      const want = ['ALLOW SELECTION', "DON'T ALLOW", '×'];
+      document.querySelectorAll('button, a, div[role=button]').forEach(b => {
+        const t = (b.innerText || '').trim().toUpperCase();
+        if (want.includes(t)) { try { b.click(); } catch (e) {} }
+      });
+    """)
+    time.sleep(1.5)
 
 
-def click_game_xy(gx, gy):
+def click_rel(fx, fy):
+    """کلیک روی canvas با نسبت‌های 0..1 از عرض و ارتفاع (بدون نیاز به Phaser)."""
     canvas = d.find_element(By.CSS_SELECTOR, "canvas")
     d.execute_script("arguments[0].scrollIntoView({block:'center'});", canvas)
     time.sleep(0.5)
-    info = d.execute_script(
-        "const g=Phaser.GAMES[0];const r=g.canvas.getBoundingClientRect();"
-        "return [r.width,r.height,g.config.width,g.config.height];")
-    w, h, gw, gh = info
-    dx = gx / gw * w - w / 2
-    dy = gy / gh * h - h / 2
-    ActionChains(d).move_to_element_with_offset(canvas, int(dx), int(dy)).click().perform()
+    w, h = canvas.size["width"], canvas.size["height"]
+    ActionChains(d).move_to_element_with_offset(
+        canvas, int(fx * w - w / 2), int(fy * h - h / 2)).click().perform()
+
+
+def canvas_shot(name):
+    try:
+        d.find_element(By.CSS_SELECTOR, "canvas").screenshot(str(OUT / f"{name}_canvas.png"))
+    except Exception as e:
+        print("[probe] canvas shot failed:", e)
 
 
 try:
@@ -146,42 +174,42 @@ try:
     time.sleep(0.5)
     d.execute_script("arguments[0].click();", target)
 
-    # --- منتظر Phaser و منوی بازی ---
+    # --- منتظر canvas ---
     end = time.time() + 40
-    while time.time() < end:
-        ok = d.execute_script("return !!(window.Phaser && Phaser.GAMES && Phaser.GAMES[0] && Phaser.GAMES[0].canvas)")
-        if ok: break
+    while time.time() < end and not d.find_elements(By.CSS_SELECTOR, "canvas"):
         time.sleep(2)
     time.sleep(6)
     dismiss_overlays()
+    diag = d.execute_script(JS_FIND)
+    (OUT / "p0_diag.json").write_text(json.dumps(diag, ensure_ascii=False, indent=1))
+    print("[probe] diag:", json.dumps(diag)[:600])
     menu = dump("p0_menu")
-    print("[probe] scenes:", [(s["key"], s["active"], s["children"]) for s in menu.get("scenes", [])])
+    canvas_shot("p0_menu")
 
     # --- کلیک روی START داخل canvas ---
     start = None
-    for s in menu.get("scenes", []):
-        for t in s["texts"]:
+    for sc in menu.get("scenes", []) if isinstance(menu, dict) else []:
+        for t in sc["texts"]:
             if t["text"].strip().upper() == "START" and t.get("visible", True):
                 start = t; break
         if start: break
-    if start:
-        print("[probe] in-canvas START at", start["x"], start["y"])
-        click_game_xy(start["x"], start["y"])
-    else:
-        print("[probe] START text not found, using fallback position")
+    if start and diag.get("found"):
         gw, gh = menu.get("gameW", 960), menu.get("gameH", 828)
-        click_game_xy(gw * 0.5, gh * 0.42)
+        print("[probe] in-canvas START (phaser coords)", start["x"], start["y"])
+        click_rel(start["x"] / gw, start["y"] / gh)
+    else:
+        print("[probe] using fallback relative position for START")
+        click_rel(0.5, 0.42)
     time.sleep(5)
-    dump("p1_started")
+    dump("p1_started"); canvas_shot("p1_started")
 
-    # --- چند حرکت با کلیدهای جهتی و ثبت وضعیت بعد از آن‌ها ---
-    canvas = d.find_element(By.CSS_SELECTOR, "canvas")
-    for i, key in enumerate([Keys.ARROW_LEFT, Keys.ARROW_UP, Keys.ARROW_RIGHT, Keys.ARROW_DOWN] * 2):
+    # --- چند حرکت با کلیدهای جهتی ---
+    for key in [Keys.ARROW_LEFT, Keys.ARROW_UP, Keys.ARROW_RIGHT, Keys.ARROW_DOWN] * 2:
         ActionChains(d).send_keys(key).perform()
         time.sleep(0.5)
-    dump("p2_after_keys")
+    dump("p2_after_keys"); canvas_shot("p2_after_keys")
     time.sleep(5)
-    dump("p3_later")
+    dump("p3_later"); canvas_shot("p3_later")
 finally:
     try:
         finish_session(d)
