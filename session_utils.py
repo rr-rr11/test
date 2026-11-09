@@ -31,8 +31,14 @@ def _parse(blob: str) -> dict:
 
 def load_session(driver, blob: str) -> None:
     data = _parse(blob)
+    # localStorage را می‌شود جدا در Secret به نام RC_LOCAL (JSON) هم داد
+    extra = os.environ.get("RC_LOCAL", "").strip()
+    if extra:
+        data.setdefault("local", {}).update(json.loads(extra))
+
     driver.get(BASE_URL)
     time.sleep(3)
+    added, failed = [], []
     for c in data.get("cookies", []):
         c = {k: v for k, v in c.items() if k in
              ("name", "value", "domain", "path", "secure", "httpOnly", "expiry")}
@@ -40,13 +46,21 @@ def load_session(driver, blob: str) -> None:
             c["expiry"] = int(c["expiry"])
         try:
             driver.add_cookie(c)
+            added.append(c["name"])
         except Exception:
             c.pop("domain", None)
             try:
                 driver.add_cookie(c)
-            except Exception:
-                pass
+                added.append(c["name"])
+            except Exception as e:
+                failed.append(c.get("name"))
     for k, v in data.get("local", {}).items():
         driver.execute_script("localStorage.setItem(arguments[0], arguments[1]);", k, v)
+
+    # فقط اسم‌ها لاگ می‌شوند، نه مقدارها
+    print(f"[session] cookies added={len(added)} failed={len(failed)} {failed}")
+    print(f"[session] cookie names: {added}")
+    print(f"[session] localStorage keys: {list(data.get('local', {}).keys())}")
     driver.refresh()
-    time.sleep(4)
+    time.sleep(5)
+    print(f"[session] url after refresh: {driver.current_url}")
