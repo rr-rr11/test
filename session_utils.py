@@ -21,6 +21,9 @@ def _parse(blob: str) -> dict:
         raw = json.loads(blob)
         if isinstance(raw, list):
             raw = {"cookies": raw, "local": {}}
+        elif "cookies" not in raw and "local" not in raw:
+            # فقط توکن‌ها (خروجی localStorage) داده شده؛ به‌عنوان localStorage بخوان
+            raw = {"cookies": [], "local": raw}
     else:
         raw = json.loads(base64.b64decode(blob).decode())
     for c in raw.get("cookies", []):
@@ -55,7 +58,9 @@ def load_session(driver, blob: str) -> None:
             except Exception as e:
                 failed.append(c.get("name"))
     for k, v in data.get("local", {}).items():
-        driver.execute_script("localStorage.setItem(arguments[0], arguments[1]);", k, v)
+        if v is None:
+            continue
+        driver.execute_script("localStorage.setItem(arguments[0], arguments[1]);", k, str(v))
 
     # فقط اسم‌ها لاگ می‌شوند، نه مقدارها
     print(f"[session] cookies added={len(added)} failed={len(failed)} {failed}")
