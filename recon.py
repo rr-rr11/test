@@ -15,7 +15,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
-from session_utils import load_session
+from session_utils import load_session, finish_session
 
 OUT = Path("recon"); OUT.mkdir(exist_ok=True)
 
@@ -139,4 +139,5 @@ try:
             d.switch_to.window(main)
 
 finally:
+    finish_session(d)
     pause("Enter برای بستن مرورگر..."); d.quit()
