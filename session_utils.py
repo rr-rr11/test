@@ -14,8 +14,23 @@ def export_session(driver) -> str:
     return base64.b64encode(json.dumps(data).encode()).decode()
 
 
+def _parse(blob: str) -> dict:
+    """هم base64 (خروجی save_session.py) و هم JSON خام کوکی (خروجی Cookie-Editor) را می‌پذیرد."""
+    blob = blob.strip()
+    if blob[:1] in "[{":
+        raw = json.loads(blob)
+        if isinstance(raw, list):
+            raw = {"cookies": raw, "local": {}}
+    else:
+        raw = json.loads(base64.b64decode(blob).decode())
+    for c in raw.get("cookies", []):
+        if "expirationDate" in c and "expiry" not in c:   # فرمت Cookie-Editor
+            c["expiry"] = c["expirationDate"]
+    return raw
+
+
 def load_session(driver, blob: str) -> None:
-    data = json.loads(base64.b64decode(blob).decode())
+    data = _parse(blob)
     driver.get(BASE_URL)
     time.sleep(3)
     for c in data.get("cookies", []):
