@@ -83,11 +83,26 @@ try:
     # ---- روی هر دکمه START در کارت‌های بازی کلیک می‌کنیم و نتیجه را ثبت می‌کنیم ----
     START_XP = "//button[contains(translate(normalize-space(.),'start','START'),'START')]"
     GAMES = "https://rollercoin.com/game/choose_game"
-    d.get(GAMES); time.sleep(10)
-    total = len(d.find_elements(By.XPATH, START_XP))
+
+    def open_games(tag):
+        """صفحه خانه را باز می‌کند، با کلیک روی منو به بازی‌ها می‌رود و منتظر دکمه‌های START می‌ماند."""
+        d.get("https://rollercoin.com/"); time.sleep(8)
+        try:
+            link = d.find_element(By.CSS_SELECTOR, "a[href*='choose_game']")
+            d.execute_script("arguments[0].click();", link)
+        except Exception:
+            d.get(GAMES)
+        end = time.time() + 40
+        while time.time() < end and not d.find_elements(By.XPATH, START_XP):
+            time.sleep(2)
+        n = len(d.find_elements(By.XPATH, START_XP))
+        print(f"[{tag}] url={d.current_url} title={d.title!r} START={n}")
+        return n
+    total = open_games("first")
+    dump("games_page")
     print("START buttons:", total)
     for i in range(total):
-        d.get(GAMES); time.sleep(8)
+        open_games(f"game{i}")
         btns = d.find_elements(By.XPATH, START_XP)
         if i >= len(btns):
             break
