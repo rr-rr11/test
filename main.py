@@ -27,7 +27,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 
-from session_utils import load_session
+from session_utils import load_session, finish_session
 
 # ───────────────────────── تنظیمات ─────────────────────────
 BASE_URL = "https://rollercoin.com"
@@ -309,6 +309,8 @@ def main() -> int:
         snap(driver, "fatal")
         return 1
     finally:
+        if SESSION:
+            finish_session(driver)
         driver.quit()
 
 
