@@ -25,6 +25,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Restore session state
+        uses: actions/cache/restore@v4
+        with:
+          path: session_state
+          key: rc-session-${{ github.run_id }}
+          restore-keys: rc-session-
+
       - name: Run RollerCoin Bot
         run: python main.py
         env:
@@ -33,6 +40,13 @@ jobs:
           RC_SESSION: ${{ secrets.RC_SESSION }}
           RC_LOCAL: ${{ secrets.RC_LOCAL }}
           HEADLESS: "1"
+
+      - name: Save session state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: session_state
+          key: rc-session-${{ github.run_id }}
 
       # اسکرین‌شات و HTML صفحه برای دیباگ (حتی اگر خطا بدهد)
       - name: Upload debug files
