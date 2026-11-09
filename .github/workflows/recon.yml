@@ -3,6 +3,10 @@ name: RollerCoin Recon
 on:
   workflow_dispatch:   # فقط دستی اجرا می‌شود
 
+concurrency:
+  group: rollercoin-session
+  cancel-in-progress: false
+
 jobs:
   recon:
     runs-on: ubuntu-latest
