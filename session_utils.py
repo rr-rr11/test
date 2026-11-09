@@ -1,5 +1,9 @@
 """ذخیره و بازیابی نشست لاگین (کوکی + localStorage) برای حساب‌های ورود با گوگل."""
-import base64, json, os, time
+import base64, hashlib, json, os, time
+from pathlib import Path
+
+STATE_FILE = Path('session_state/state.json')
+_SECRET_FP = ''
 
 BASE_URL = "https://rollercoin.com"
 
@@ -12,6 +16,48 @@ def export_session(driver) -> str:
         ),
     }
     return base64.b64encode(json.dumps(data).encode()).decode()
+
+
+def _jwt_exp(tok):
+    try:
+        p = tok.split(".")[1]
+        p += "=" * (-len(p) % 4)
+        return json.loads(base64.urlsafe_b64decode(p)).get("exp")
+    except Exception:
+        return None
+
+
+def describe_tokens(driver, tag: str) -> None:
+    """اثر انگشت کوتاه و زمان انقضای توکن‌ها را چاپ می‌کند (خود توکن هرگز چاپ نمی‌شود)."""
+    t, r = driver.execute_script(
+        "return [localStorage.getItem('token'), localStorage.getItem('refreshToken')]")
+    now = time.time()
+
+    def d(tok):
+        if not tok:
+            return "missing"
+        exp = _jwt_exp(tok)
+        fp = hashlib.sha256(tok.encode()).hexdigest()[:6]
+        return f"fp={fp} " + (f"expires_in={int(exp - now)}s" if exp else "exp=n/a")
+
+    print(f"[tokens:{tag}] token: {d(t)} | refresh: {d(r)}")
+
+
+def finish_session(driver) -> None:
+    """آخر هر اجرا: توکن‌های تازه را برای اجرای بعدی ذخیره می‌کند (با actions/cache)."""
+    try:
+        describe_tokens(driver, "end")
+        t, r = driver.execute_script(
+            "return [localStorage.getItem('token'), localStorage.getItem('refreshToken')]")
+        if t and r and "sign-in" not in driver.current_url:
+            STATE_FILE.parent.mkdir(exist_ok=True)
+            STATE_FILE.write_text(json.dumps(
+                {"secret_fp": _SECRET_FP, "local": {"token": t, "refreshToken": r}}))
+            print("[session] state saved for next run")
+        else:
+            print("[session] not logged in at end; state not saved")
+    except Exception as e:
+        print("[session] finish failed:", e)
 
 
 def _parse(blob: str) -> dict:
@@ -33,7 +79,20 @@ def _parse(blob: str) -> dict:
 
 
 def load_session(driver, blob: str) -> None:
+    global _SECRET_FP
+    _SECRET_FP = hashlib.sha256(blob.encode()).hexdigest()[:12]
     data = _parse(blob)
+    # اگر اجرای قبلی توکن تازه ذخیره کرده (و Secret از آن موقع عوض نشده)، آن را ترجیح بده
+    if STATE_FILE.exists():
+        try:
+            st = json.loads(STATE_FILE.read_text())
+            if st.get("secret_fp") == _SECRET_FP:
+                data["local"] = st["local"]
+                print("[session] using state saved by previous run")
+            else:
+                print("[session] RC_SESSION changed; ignoring old state")
+        except Exception as e:
+            print("[session] bad state file:", e)
     # localStorage را می‌شود جدا در Secret به نام RC_LOCAL (JSON) هم داد
     extra = os.environ.get("RC_LOCAL", "").strip()
     if extra:
@@ -66,6 +125,8 @@ def load_session(driver, blob: str) -> None:
     print(f"[session] cookies added={len(added)} failed={len(failed)} {failed}")
     print(f"[session] cookie names: {added}")
     print(f"[session] localStorage keys: {list(data.get('local', {}).keys())}")
+    describe_tokens(driver, "loaded")
     driver.refresh()
     time.sleep(5)
     print(f"[session] url after refresh: {driver.current_url}")
+    describe_tokens(driver, "after_refresh")
