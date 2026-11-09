@@ -31,6 +31,7 @@ jobs:
           RC_EMAIL: ${{ secrets.RC_EMAIL }}
           RC_PASSWORD: ${{ secrets.RC_PASSWORD }}
           RC_SESSION: ${{ secrets.RC_SESSION }}
+          RC_LOCAL: ${{ secrets.RC_LOCAL }}
           HEADLESS: "1"
 
       # اسکرین‌شات و HTML صفحه برای دیباگ (حتی اگر خطا بدهد)
