@@ -1,0 +1,30 @@
+name: RollerCoin Recon
+
+on:
+  workflow_dispatch:   # فقط دستی اجرا می‌شود
+
+jobs:
+  recon:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Run recon
+        run: python recon.py
+        env:
+          RC_EMAIL: ${{ secrets.RC_EMAIL }}
+          RC_PASSWORD: ${{ secrets.RC_PASSWORD }}
+          RC_SESSION: ${{ secrets.RC_SESSION }}
+          HEADLESS: "1"
+      - name: Upload recon output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recon
+          path: recon/
+          if-no-files-found: ignore
