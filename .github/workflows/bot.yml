@@ -1,9 +1,14 @@
 name: RollerCoin Bot
 
 on:
-  schedule:
-    - cron: '0 * * * *'   # هر ساعت
+  # schedule فعلاً غیرفعال است تا منطق بازی‌ها آماده شود:
+  # schedule:
+  #   - cron: '0 * * * *'
   workflow_dispatch:       # اجرای دستی
+
+concurrency:
+  group: rollercoin-session
+  cancel-in-progress: false
 
 jobs:
   run-bot:
