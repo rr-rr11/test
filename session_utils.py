@@ -98,6 +98,12 @@ def load_session(driver, blob: str) -> None:
     if extra:
         data.setdefault("local", {}).update(json.loads(extra))
 
+    loc = data.get("local", {})
+    exp = _jwt_exp(loc.get("token") or "")
+    if exp and exp - time.time() < 240:
+        loc.pop("token", None)   # با refreshToken خود سایت توکن تازه می‌گیرد
+        print("[session] token near expiry -> dropped so the app refreshes it")
+
     driver.get(BASE_URL)
     time.sleep(3)
     added, failed = [], []
