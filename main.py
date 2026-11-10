@@ -21,6 +21,7 @@ from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 
 import game2048
+import games_simple
 from session_utils import finish_session, load_session
 
 SESSION = os.environ.get("RC_SESSION", "")
@@ -32,7 +33,10 @@ DEBUG = Path("debug"); DEBUG.mkdir(exist_ok=True)
 START_XP = "//button[contains(translate(normalize-space(.),'start','START'),'START')]"
 
 # بازی -> تابع بازی‌کننده (driver, seconds, log)
-BOTS = {"2048 Coins": game2048.play}
+BOTS = {
+    "2048 Coins": game2048.play,
+    "Lambo Rider": games_simple.play_idle,   # آزمایشی: بدون حرکت
+}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("rc-bot").info
