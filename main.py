@@ -1,317 +1,188 @@
 """
-RollerCoin bot - آموزشی (Selenium 4.10 + webdriver-manager)
+RollerCoin bot - آموزشی.
 
 متغیرهای محیطی:
-  RC_EMAIL, RC_PASSWORD  : اطلاعات ورود (در GitHub Secrets بگذارید)
-  HEADLESS               : "1" (پیش‌فرض) یا "0" برای دیدن مرورگر
+  RC_SESSION   : توکن‌های ورود (JSON) — برای حساب‌هایی که با گوگل وارد می‌شوند
+  GAMES        : اسم بازی‌ها با کاما (فعلاً فقط: 2048 Coins)
+  ROUNDS       : تعداد دفعات بازی کردن هر بازی در یک اجرا (پیش‌فرض ۱)
+  HEADLESS     : "1" (پیش‌فرض) یا "0"
 """
 import logging
 import os
-import random
 import sys
 import time
 from pathlib import Path
 
 from selenium import webdriver
-from selenium.common.exceptions import (
-    ElementClickInterceptedException,
-    StaleElementReferenceException,
-    TimeoutException,
-    WebDriverException,
-)
 from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 
-from session_utils import load_session, finish_session
-
-# ───────────────────────── تنظیمات ─────────────────────────
-BASE_URL = "https://rollercoin.com"
-LOGIN_URL = f"{BASE_URL}/signin"
-GAMES_URL = f"{BASE_URL}/game/choose_game"
+import game2048
+from session_utils import finish_session, load_session
 
 SESSION = os.environ.get("RC_SESSION", "")
-EMAIL = os.environ.get("RC_EMAIL", "")
-PASSWORD = os.environ.get("RC_PASSWORD", "")
+GAMES = [g.strip() for g in os.environ.get("GAMES", "2048 Coins").split(",") if g.strip()]
+ROUNDS = int(os.environ.get("ROUNDS", "1") or "1")
 HEADLESS = os.environ.get("HEADLESS", "1") == "1"
 
-DEBUG_DIR = Path("debug")
-DEBUG_DIR.mkdir(exist_ok=True)
+DEBUG = Path("debug"); DEBUG.mkdir(exist_ok=True)
+START_XP = "//button[contains(translate(normalize-space(.),'start','START'),'START')]"
 
-MAX_GAMES_PER_RUN = 10
-GAME_PLAY_SECONDS = 45                  # مدت تعامل با هر بازی
+# بازی -> تابع بازی‌کننده (driver, seconds, log)
+BOTS = {"2048 Coins": game2048.play}
 
-# چند سلکتور جایگزین برای هر المان؛ اولین موردی که پیدا شود استفاده می‌شود.
-# اگر سایت تغییر کرد، فقط همین بخش را با DevTools اصلاح کنید.
-SEL = {
-    "cookie_accept": [
-        "button#onetrust-accept-btn-handler",
-        "button[class*='cookie'][class*='accept']",
-    ],
-    "email": ["input[type='email']", "input[name='email']", "input#email"],
-    "password": ["input[type='password']", "input[name='password']", "input#password"],
-    "submit": ["button[type='submit']"],
-}
-
-XPATH_PLAY = (
-    "//*[self::button or self::a]"
-    "[contains(translate(normalize-space(.), 'PLAY', 'play'), 'play')]"
-)
-XPATH_COLLECT = (
-    "//*[self::button or self::a]"
-    "[contains(translate(normalize-space(.), 'COLLECTLAIMGR', 'collectlaimgr'), 'collect')"
-    " or contains(translate(normalize-space(.), 'CLAIM', 'claim'), 'claim')"
-    " or contains(translate(normalize-space(.), 'GETREWAD', 'getrewad'), 'get reward')]"
-)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("rc-bot")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s", datefmt="%H:%M:%S")
+log = logging.getLogger("rc-bot").info
 
 
-# ───────────────────────── ابزارها ─────────────────────────
-def setup_driver() -> webdriver.Chrome:
-    opts = Options()
+def setup_driver():
+    o = Options()
     if HEADLESS:
-        opts.add_argument("--headless=new")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--window-size=1920,1080")
-    opts.add_argument("--lang=en-US")
-    opts.add_argument("--disable-blink-features=AutomationControlled")
-    opts.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    )
-    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
-    opts.add_experimental_option("useAutomationExtension", False)
-
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()), options=opts
-    )
-    driver.set_page_load_timeout(60)
-    driver.execute_cdp_cmd(
-        "Page.addScriptToEvaluateOnNewDocument",
-        {"source": "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"},
-    )
-    return driver
+        o.add_argument("--headless=new")
+    for a in ("--no-sandbox", "--disable-dev-shm-usage", "--window-size=1600,1000", "--lang=en-US"):
+        o.add_argument(a)
+    d = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=o)
+    d.set_page_load_timeout(60)
+    return d
 
 
-def snap(driver, name: str) -> None:
-    """اسکرین‌شات + HTML برای دیباگ."""
+def snap(d, name):
     try:
-        driver.save_screenshot(str(DEBUG_DIR / f"{name}.png"))
-        (DEBUG_DIR / f"{name}.html").write_text(driver.page_source, encoding="utf-8")
-        log.info("debug saved: %s", name)
-    except WebDriverException as e:
-        log.warning("snap failed: %s", e)
-
-
-def find_first(driver, selectors, timeout=15, clickable=False):
-    """اولین سلکتوری که در زمان مجاز پیدا شود را برمی‌گرداند."""
-    end = time.time() + timeout
-    cond = EC.element_to_be_clickable if clickable else EC.visibility_of_element_located
-    while time.time() < end:
-        for s in selectors:
-            try:
-                return WebDriverWait(driver, 1).until(cond((By.CSS_SELECTOR, s)))
-            except TimeoutException:
-                continue
-    raise TimeoutException(f"none of selectors found: {selectors}")
-
-
-def safe_click(driver, el) -> bool:
-    try:
-        el.click()
-        return True
-    except (ElementClickInterceptedException, WebDriverException):
-        try:
-            driver.execute_script("arguments[0].click();", el)
-            return True
-        except WebDriverException:
-            return False
-
-
-def dismiss_cookies(driver) -> None:
-    try:
-        btn = find_first(driver, SEL["cookie_accept"], timeout=4, clickable=True)
-        safe_click(driver, btn)
-        log.info("cookie banner dismissed")
-    except TimeoutException:
+        d.save_screenshot(str(DEBUG / f"{name}.png"))
+    except Exception:
         pass
 
 
-# ───────────────────────── ورود ─────────────────────────
-def login_with_session(driver) -> bool:
-    """ورود با نشست ذخیره‌شده (برای حساب‌های ورود با گوگل)."""
-    load_session(driver, SESSION)
-    driver.get(GAMES_URL)
-    time.sleep(6)
-    snap(driver, "session_check")
-    if "signin" in driver.current_url:
-        log.error("نشست منقضی شده؛ save_session.py را دوباره اجرا کنید و RC_SESSION را عوض کنید.")
+def dismiss_overlays(d):
+    d.execute_script("""
+      const want = ['ALLOW SELECTION', "DON'T ALLOW", '×'];
+      document.querySelectorAll('button, a, div[role=button]').forEach(b => {
+        const t = (b.innerText || '').trim().toUpperCase();
+        if (want.includes(t)) { try { b.click(); } catch (e) {} }
+      });
+    """)
+    time.sleep(1.5)
+
+
+def open_games(d):
+    d.get("https://rollercoin.com/"); time.sleep(8)
+    if "sign-in" in d.current_url:
         return False
-    log.info("session login OK -> %s", driver.current_url)
-    return True
-
-
-def login(driver) -> bool:
-    if SESSION:
-        return login_with_session(driver)
-    if not EMAIL or not PASSWORD:
-        log.error("RC_EMAIL / RC_PASSWORD تنظیم نشده‌اند.")
-        return False
-
-    driver.get(LOGIN_URL)
-    dismiss_cookies(driver)
-
     try:
-        email = find_first(driver, SEL["email"], timeout=20)
-        pwd = find_first(driver, SEL["password"], timeout=10)
-    except TimeoutException:
-        snap(driver, "login_form_not_found")
-        return False
-
-    email.clear()
-    email.send_keys(EMAIL)
-    pwd.clear()
-    pwd.send_keys(PASSWORD)
-    snap(driver, "login_filled")
-
-    try:
-        safe_click(driver, find_first(driver, SEL["submit"], timeout=10, clickable=True))
-    except TimeoutException:
-        pwd.send_keys("\n")
-
-    # موفقیت = خروج از صفحه signin
-    try:
-        WebDriverWait(driver, 30).until(lambda d: "signin" not in d.current_url)
-    except TimeoutException:
-        snap(driver, "login_failed")  # احتمالاً کپچا یا رمز اشتباه
-        log.error("ورود ناموفق (کپچا / رمز اشتباه / بلاک IP). debug را ببینید.")
-        return False
-
-    log.info("login OK -> %s", driver.current_url)
-    snap(driver, "after_login")
-    return True
+        d.execute_script("arguments[0].click();", d.find_element(By.CSS_SELECTOR, "a[href*='choose_game']"))
+    except Exception:
+        d.get("https://rollercoin.com/game/choose_game")
+    end = time.time() + 40
+    while time.time() < end and not d.find_elements(By.XPATH, START_XP):
+        time.sleep(2)
+    return bool(d.find_elements(By.XPATH, START_XP))
 
 
-# ───────────────────────── بازی‌ها ─────────────────────────
-def click_collect_if_any(driver) -> bool:
-    for el in driver.find_elements(By.XPATH, XPATH_COLLECT):
-        try:
-            if el.is_displayed() and safe_click(driver, el):
-                log.info("reward button clicked: %r", el.text.strip()[:30])
-                return True
-        except StaleElementReferenceException:
-            continue
+def card_name(text):
+    lines = [x.strip() for x in text.split("\n") if x.strip()]
+    return next((x for x in lines if x.upper() not in ("NEW", "HOT", "COMMUNITY")), "")
+
+
+def click_card(d, name):
+    for b in d.find_elements(By.XPATH, START_XP):
+        t = d.execute_script(
+            "let e=arguments[0];for(let k=0;k<4&&e.parentElement;k++){e=e.parentElement;}return e.innerText;", b)
+        if card_name(t).lower() == name.lower():
+            d.execute_script("arguments[0].scrollIntoView({block:'center'});", b)
+            time.sleep(0.5)
+            d.execute_script("arguments[0].click();", b)
+            return True
     return False
 
 
-def play_generic(driver, seconds: int) -> None:
-    """
-    هندلر عمومی: روی canvas بازی کلیک تصادفی می‌زند.
-    ⚠️ بازی‌های RollerCoin قوانین متفاوتی دارند و این هندلر فقط یک نقطه شروع است.
-    برای هر بازی باید منطق اختصاصی بنویسید (به PLAYERS پایین فایل نگاه کنید).
-    """
-    try:
-        canvas = WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "canvas"))
-        )
-    except TimeoutException:
-        log.warning("canvas پیدا نشد")
-        return
+def click_rel(d, fx, fy):
+    c = d.find_element(By.CSS_SELECTOR, "canvas")
+    d.execute_script("arguments[0].scrollIntoView({block:'center'});", c)
+    time.sleep(0.5)
+    w, h = c.size["width"], c.size["height"]
+    ActionChains(d).move_to_element_with_offset(c, int(fx * w - w / 2), int(fy * h - h / 2)).click().perform()
 
-    size = canvas.size
-    end = time.time() + seconds
-    actions = ActionChains(driver)
+
+def page_text(d):
+    return d.execute_script("return document.body.innerText || ''")
+
+
+def claim_reward(d):
+    """دکمه‌ی CLAIM REWARD را می‌زند و نتیجه را چاپ می‌کند."""
+    JS_CLICK = """
+      for (const b of document.querySelectorAll('button, a, div[role=button]')) {
+        if ((b.innerText || '').trim().toUpperCase() === 'CLAIM REWARD') { b.click(); return true; }
+      }
+      return false;"""
+    end = time.time() + 30
+    clicked = False
     while time.time() < end:
-        x = random.randint(-size["width"] // 2 + 10, size["width"] // 2 - 10)
-        y = random.randint(-size["height"] // 2 + 10, size["height"] // 2 - 10)
-        try:
-            actions.move_to_element_with_offset(canvas, x, y).click().perform()
-        except WebDriverException:
+        if d.execute_script(JS_CLICK):
+            clicked = True; break
+        time.sleep(1)
+    snap(d, "result_before_claim")
+    txt = page_text(d)
+    score = [ln for ln in txt.split("\n") if "point" in ln.lower() or "score" in ln.lower()][:3]
+    log(f"claim clicked={clicked} score_lines={score}")
+    if not clicked:
+        return False
+    end = time.time() + 45
+    while time.time() < end:
+        t = page_text(d).upper()
+        if "POWER WILL REMAIN VALID" in t or "NEW HASHRATE" in t:
             break
-        time.sleep(random.uniform(0.15, 0.4))
-
-
-# نام بخشی از URL بازی -> تابع اختصاصی (driver, seconds)
-PLAYERS = {
-    # "coinclick": play_coinclick,
-}
-
-
-def pick_player(url: str):
-    for key, fn in PLAYERS.items():
-        if key in url:
-            return fn
-    return play_generic
-
-
-def play_games(driver) -> None:
-    driver.get(GAMES_URL)
-    time.sleep(4)
-    dismiss_cookies(driver)
-    snap(driver, "games_page")
-
-    played = 0
-    while played < MAX_GAMES_PER_RUN:
-        buttons = [b for b in driver.find_elements(By.XPATH, XPATH_PLAY) if b.is_displayed()]
-        if played >= len(buttons):
-            log.info("بازی دیگری برای اجرا نیست (%d دکمه).", len(buttons))
-            break
-
-        btn = buttons[played]
-        try:
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
-            time.sleep(0.5)
-            if not safe_click(driver, btn):
-                played += 1
-                continue
-        except StaleElementReferenceException:
-            continue
-
-        time.sleep(5)
-        log.info("game %d started: %s", played + 1, driver.current_url)
-        snap(driver, f"game_{played + 1}_start")
-
-        pick_player(driver.current_url)(driver, GAME_PLAY_SECONDS)
-
         time.sleep(2)
-        click_collect_if_any(driver)
-        snap(driver, f"game_{played + 1}_end")
-
-        played += 1
-        driver.get(GAMES_URL)
-        time.sleep(4)
-
-    log.info("games finished: %d", played)
+    snap(d, "result_claimed")
+    out = [ln for ln in page_text(d).split("\n") if "power" in ln.lower() or "hashrate" in ln.lower()][:4]
+    log(f"after claim: {out}")
+    return True
 
 
-# ───────────────────────── اجرای اصلی ─────────────────────────
-def main() -> int:
-    driver = setup_driver()
+def play_one(d, name, n):
+    tag = f"{name.replace(' ', '_')}_{n}"
+    if not open_games(d):
+        log("games page not available (logged out?)"); snap(d, f"{tag}_nogames"); return False
+    if not click_card(d, name):
+        log(f"card not found: {name}"); snap(d, f"{tag}_nocard"); return False
+    end = time.time() + 40
+    while time.time() < end and not d.find_elements(By.CSS_SELECTOR, "canvas"):
+        time.sleep(2)
+    time.sleep(6)
+    dismiss_overlays(d)
+    snap(d, f"{tag}_menu")
+    click_rel(d, 0.5, 0.42)                      # دکمه‌ی START داخل خود بازی
+    time.sleep(3)
+    snap(d, f"{tag}_started")
+    finished = BOTS[name](d, 72, log)
+    snap(d, f"{tag}_end")
+    log(f"{name}: finished={finished}")
+    return claim_reward(d)
+
+
+def main():
+    if not SESSION:
+        log("RC_SESSION تنظیم نشده است."); return 1
+    d = setup_driver()
     try:
-        if not login(driver):
-            return 1
-        play_games(driver)
+        load_session(d, SESSION)
+        ok = 0
+        for name in GAMES:
+            if name not in BOTS:
+                log(f"برای «{name}» هنوز ربات نوشته نشده؛ رد شد."); continue
+            for n in range(1, ROUNDS + 1):
+                log(f"=== {name} (round {n}/{ROUNDS}) ===")
+                try:
+                    ok += 1 if play_one(d, name, n) else 0
+                except Exception:
+                    logging.exception("game failed"); snap(d, f"fatal_{n}")
+        log(f"done: {ok} reward(s) claimed")
         return 0
-    except Exception:
-        log.exception("unexpected error")
-        snap(driver, "fatal")
-        return 1
     finally:
-        if SESSION:
-            finish_session(driver)
-        driver.quit()
+        finish_session(d)
+        d.quit()
 
 
 if __name__ == "__main__":
