@@ -110,6 +110,28 @@ def page_text(d):
     return d.execute_script("return document.body.innerText || ''")
 
 
+def collect_bonus(d, wait=8):
+    """پاپ‌آپ «CONGRATULATIONS / Free power ... COLLECT» را (فقط اگر ظاهر شد) می‌بندد و دکمه‌ی COLLECT را می‌زند."""
+    JS = """
+      if (!(document.body.innerText || '').toUpperCase().includes('CONGRATULATIONS')) return null;
+      const txt = ((document.body.innerText.match(/Free power[^\\n]*/i) || [''])[0]);
+      for (const b of document.querySelectorAll('button, a, div[role=button]')) {
+        if ((b.innerText || '').trim().toUpperCase() === 'COLLECT') { b.click(); return txt || 'collected'; }
+      }
+      return null;"""
+    end, got = time.time() + wait, 0
+    while time.time() < end:
+        r = d.execute_script(JS)
+        if r is not None:
+            got += 1
+            log(f"bonus collected: {r}")
+            snap(d, f"bonus_{int(time.time())}")
+            time.sleep(1.5)
+        else:
+            time.sleep(1)
+    return got
+
+
 def claim_reward(d):
     """دکمه‌ی CLAIM REWARD را می‌زند و نتیجه را چاپ می‌کند."""
     JS_CLICK = """
@@ -138,6 +160,7 @@ def claim_reward(d):
     snap(d, "result_claimed")
     out = [ln for ln in page_text(d).split("\n") if "power" in ln.lower() or "hashrate" in ln.lower()][:4]
     log(f"after claim: {out}")
+    collect_bonus(d, 8)
     return True
 
 
@@ -145,6 +168,7 @@ def play_one(d, name, n):
     tag = f"{name.replace(' ', '_')}_{n}"
     if not open_games(d):
         log("games page not available (logged out?)"); snap(d, f"{tag}_nogames"); return False
+    collect_bonus(d, 3)
     if not click_card(d, name):
         log(f"card not found: {name}"); snap(d, f"{tag}_nocard"); return False
     end = time.time() + 40
