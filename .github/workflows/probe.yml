@@ -3,9 +3,9 @@ name: RollerCoin Probe
 on:
   workflow_dispatch:
     inputs:
-      game:
-        description: "اسم بازی (مثل: 2048 Coins یا Coin-Flip)"
-        default: "2048 Coins"
+      games:
+        description: "اسم بازی‌ها با کاما (مثل: Coin-Flip,Coin-match)"
+        default: "Coin-Flip,Coin-match"
 
 concurrency:
   group: rollercoin-session
@@ -14,7 +14,7 @@ concurrency:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,7 +35,7 @@ jobs:
         env:
           RC_SESSION: ${{ secrets.RC_SESSION }}
           RC_LOCAL: ${{ secrets.RC_LOCAL }}
-          GAME: ${{ github.event.inputs.game }}
+          GAMES: ${{ github.event.inputs.games || 'Coin-Flip,Coin-match' }}
           HEADLESS: "1"
 
       - name: Save session state
