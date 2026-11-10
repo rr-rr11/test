@@ -1,10 +1,17 @@
 name: RollerCoin Bot
 
 on:
-  # schedule فعلاً غیرفعال است تا منطق بازی‌ها آماده شود:
+  workflow_dispatch:
+    inputs:
+      games:
+        description: "اسم بازی‌ها با کاما (فعلاً: 2048 Coins)"
+        default: "2048 Coins"
+      rounds:
+        description: "چند بار هر بازی اجرا شود"
+        default: "1"
+  # schedule فعلاً غیرفعال است تا بازی‌ها تست شوند:
   # schedule:
   #   - cron: '0 * * * *'
-  workflow_dispatch:       # اجرای دستی
 
 concurrency:
   group: rollercoin-session
@@ -13,8 +20,7 @@ concurrency:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -40,10 +46,10 @@ jobs:
       - name: Run RollerCoin Bot
         run: python main.py
         env:
-          RC_EMAIL: ${{ secrets.RC_EMAIL }}
-          RC_PASSWORD: ${{ secrets.RC_PASSWORD }}
           RC_SESSION: ${{ secrets.RC_SESSION }}
           RC_LOCAL: ${{ secrets.RC_LOCAL }}
+          GAMES: ${{ github.event.inputs.games || '2048 Coins' }}
+          ROUNDS: ${{ github.event.inputs.rounds || '1' }}
           HEADLESS: "1"
 
       - name: Save session state
@@ -53,7 +59,6 @@ jobs:
           path: session_state
           key: rc-session-${{ github.run_id }}
 
-      # اسکرین‌شات و HTML صفحه برای دیباگ (حتی اگر خطا بدهد)
       - name: Upload debug files
         if: always()
         uses: actions/upload-artifact@v4
