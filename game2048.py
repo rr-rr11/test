@@ -46,11 +46,22 @@ def _dist(f, t):
     return float(np.abs(f[0] - t[0]).mean() + 2.0 * np.abs(f[1] - t[1]).sum() / 3.0)
 
 
+_LEGEND = None
+
+
+def reset_legend():
+    global _LEGEND
+    _LEGEND = None
+
+
 def read_board(img):
     """تصویر PIL از canvas -> (جدول ۴×۴ از سطح‌ها، بدترین نسبت best/second). ۰ = خانه خالی."""
+    global _LEGEND
     if img.size != STD_SIZE:
         img = img.resize(STD_SIZE, Image.LANCZOS)
-    legend = [_feat(_crop(img, LEG_X, y, LEG_HALF)) for y in LEG_Y]
+    if _LEGEND is None:   # آیکن‌های راهنما در طول بازی ثابت‌اند؛ فقط یک بار استخراج می‌شوند
+        _LEGEND = [_feat(_crop(img, LEG_X, y, LEG_HALF)) for y in LEG_Y]
+    legend = _LEGEND
     board, worst = [], 0.0
     for r in range(4):
         row = []
@@ -219,69 +230,113 @@ def best_moves(board):
 KEYS = [Keys.ARROW_LEFT, Keys.ARROW_UP, Keys.ARROW_RIGHT, Keys.ARROW_DOWN]
 JS_RESULT = ("const t=(document.body.innerText||'').toUpperCase();"
              "return t.includes('CLAIM REWARD')||t.includes('YOU WIN')||t.includes('YOU LOSE')||t.includes('GAME OVER');")
+JS_RECT = ("const e=document.querySelector('canvas');if(!e)return null;const c=e.getBoundingClientRect();"
+           "return [c.left+window.scrollX,c.top+window.scrollY,c.width,c.height];")
+
+_rect = None
 
 
 def _canvas_image(d):
-    """تصویر سریع فقط از ناحیه‌ی canvas (CDP)."""
-    r = d.execute_script(
-        "const c=document.querySelector('canvas').getBoundingClientRect();"
-        "return [c.left+window.scrollX,c.top+window.scrollY,c.width,c.height];")
-    data = d.execute_cdp_cmd("Page.captureScreenshot", {
-        "format": "jpeg", "quality": 85, "fromSurface": True,
-        "clip": {"x": r[0], "y": r[1], "width": r[2], "height": r[3], "scale": 1}})
+    """تصویر سریع فقط از ناحیه‌ی canvas (CDP). اگر canvas دیگر نیست (بازی تمام شده) None برمی‌گرداند."""
+    global _rect
+    if _rect is None:
+        _rect = d.execute_script(JS_RECT)
+        if _rect is None:
+            return None
+    params = {"format": "jpeg", "quality": 70, "fromSurface": True,
+              "clip": {"x": _rect[0], "y": _rect[1], "width": _rect[2], "height": _rect[3], "scale": 1}}
+    try:
+        data = d.execute_cdp_cmd("Page.captureScreenshot", dict(params, optimizeForSpeed=True))
+    except Exception:
+        try:
+            data = d.execute_cdp_cmd("Page.captureScreenshot", params)
+        except Exception:
+            _rect = None
+            return None if d.execute_script(JS_RECT) is None else _canvas_image(d)
     return Image.open(io.BytesIO(base64.b64decode(data["data"]))).convert("RGB")
 
 
-def _read_stable(d, tries=4):
+def _wait_start(d, log, timeout=12):
+    """منتظر می‌ماند تا انیمیشن «GO!» تمام شود و دو خانه‌ی اولیه‌ی ۱ یا ۲ دیده شود."""
+    end = time.time() + timeout
     prev = None
-    for _ in range(tries):
-        b, worst = read_board(_canvas_image(d))
-        if b == prev:
-            return b, worst
+    while time.time() < end:
+        img = _canvas_image(d)
+        if img is None:
+            return None
+        b, worst = read_board(img)
+        tiles = [x for r in b for x in r if x]
+        if len(tiles) >= 2 and max(tiles) <= 2 and worst < 0.97 and b == prev:
+            return b
         prev = b
-        time.sleep(0.06)
-    return prev, 99.0
+        time.sleep(0.15)
+    log("[2048] start screen not recognised; continuing anyway")
+    img = _canvas_image(d)
+    return read_board(img)[0] if img is not None else None
 
 
 def play(d, seconds=68, log=print):
-    """بازی را تا پایان زمان یا نمایش صفحه‌ی نتیجه ادامه می‌دهد. True اگر به صفحه‌ی نتیجه رسید."""
+    """بازی را تا پایان زمان یا ناپدید شدن canvas ادامه می‌دهد. True اگر بازی تمام شد."""
+    global _rect
+    _rect = None
+    reset_legend()
     deadline = time.time() + seconds
     d.execute_script("document.querySelector('canvas').scrollIntoView({block:'center'});")
     time.sleep(0.5)
+    board = _wait_start(d, log)
+    if board is None:
+        log("[2048] canvas gone before start"); return True
+    _rect = None   # بعد از اسکرول دوباره بگیر
+    t0 = time.time()
     moves, unreadable, resyncs = 0, 0, 0
-    board, pred = None, None
+    pred = None
     while time.time() < deadline:
-        if moves % 4 == 0 and d.execute_script(JS_RESULT):
-            log(f"[2048] result screen after {moves} moves (resyncs={resyncs})")
-            return True
-        actual, worst = _read_stable(d)
-        if actual is None or worst > 0.97:
-            unreadable += 1
-            if unreadable > 40:
-                log("[2048] too many unreadable frames"); return False
-            time.sleep(0.1); continue
         if pred is not None:
-            fixed, new = reconcile(pred, actual)
-            if fixed is not None and new == 0 and any(0 in r for r in pred):
-                time.sleep(0.12)                      # خانه‌ی جدید هنوز ظاهر نشده
-                actual, worst = _read_stable(d)
-                fixed, new = reconcile(pred, actual)
+            tries, fixed = 0, None
+            while True:
+                img = _canvas_image(d)
+                if img is None:
+                    log(f"[2048] canvas gone after {moves} moves in {time.time()-t0:.0f}s (resyncs={resyncs})")
+                    return True
+                actual, worst = read_board(img)
+                fixed, new = reconcile(pred, actual) if worst <= 0.97 else (None, -1)
+                has_empty = any(0 in r for r in pred)
+                if fixed is not None and not (new == 0 and has_empty and tries < 2):
+                    break
+                if tries >= 3:
+                    break
+                tries += 1
+                time.sleep(0.08)
             if fixed is not None:
                 board = fixed
             else:
-                board = actual; resyncs += 1          # کلید اعمال نشد یا ناسازگاری؛ به تصویر اعتماد کن
+                if worst > 0.97:
+                    unreadable += 1
+                    if unreadable > 40:
+                        log("[2048] too many unreadable frames"); return False
+                    pred = None; time.sleep(0.1); continue
+                board = actual; resyncs += 1      # کلید اعمال نشد یا ناسازگاری؛ به تصویر اعتماد کن
         else:
-            board = actual
+            img = _canvas_image(d)
+            if img is None:
+                return True
+            board, worst = read_board(img)
+            if worst > 0.97:
+                unreadable += 1
+                if unreadable > 40:
+                    log("[2048] too many unreadable frames"); return False
+                time.sleep(0.1); continue
         order = best_moves(board)
         if not order:
             log("[2048] no moves left"); time.sleep(1.0)
-            if d.execute_script(JS_RESULT): return True
+            if d.execute_script(JS_RESULT) or _canvas_image(d) is None: return True
             pred = None; continue
         ActionChains(d).send_keys(KEYS[order[0]]).perform()
         pred = move(board, order[0])
         moves += 1
         if moves % 20 == 0:
-            log(f"[2048] moves={moves} max_level={max(max(r) for r in board)} resyncs={resyncs}")
-        time.sleep(0.10)
+            el = time.time() - t0
+            log(f"[2048] moves={moves} t={el:.0f}s ({el/moves:.2f}s/move) max_level={max(max(r) for r in board)} resyncs={resyncs}")
+        time.sleep(0.08)
     log(f"[2048] time up after {moves} moves (resyncs={resyncs})")
-    return d.execute_script(JS_RESULT)
+    return d.execute_script(JS_RESULT) or _canvas_image(d) is None
