@@ -46,39 +46,68 @@ def _dist(f, t):
     return float(np.abs(f[0] - t[0]).mean() + 2.0 * np.abs(f[1] - t[1]).sum() / 3.0)
 
 
-_LEGEND = None
+_LEGEND = {}
+_SHIFT = (0, 0)   # جابه‌جایی احتمالی برش نسبت به canvas (پیکسل در مقیاس 831×717)
 
 
 def reset_legend():
-    global _LEGEND
-    _LEGEND = None
+    global _SHIFT
+    _LEGEND.clear()
+    _SHIFT = (0, 0)
 
 
-def read_board(img):
+def _legend(img, shift):
+    L = _LEGEND.get(shift)
+    if L is None:
+        sx, sy = shift
+        L = [_feat(_crop(img, LEG_X + sx / 831.0, y + sy / 717.0, LEG_HALF)) for y in LEG_Y]
+        _LEGEND[shift] = L
+    return L
+
+
+def read_board(img, shift=None):
     """تصویر PIL از canvas -> (جدول ۴×۴ از سطح‌ها، بدترین نسبت best/second). ۰ = خانه خالی."""
-    global _LEGEND
+    if shift is None:
+        shift = _SHIFT
     if img.size != STD_SIZE:
         img = img.resize(STD_SIZE, Image.LANCZOS)
-    if _LEGEND is None:   # آیکن‌های راهنما در طول بازی ثابت‌اند؛ فقط یک بار استخراج می‌شوند
-        _LEGEND = [_feat(_crop(img, LEG_X, y, LEG_HALF)) for y in LEG_Y]
-    legend = _LEGEND
+    sx, sy = shift[0] / 831.0, shift[1] / 717.0
+    legend = _legend(img, shift)
     board, worst = [], 0.0
     for r in range(4):
         row = []
         for c in range(4):
-            crop = _crop(img, COL_X[c], ROW_Y[r], TILE_HALF)
-            inner = _crop(img, COL_X[c], ROW_Y[r], 0.036)
+            fx, fy = COL_X[c] + sx, ROW_Y[r] + sy
+            inner = _crop(img, fx, fy, 0.036)
             arr = np.asarray(inner.convert("RGB"), dtype=np.float32)
             if arr.reshape(-1, 3).std(axis=0).mean() < EMPTY_STD:
                 row.append(0)
                 continue
-            f = _feat(crop)
+            f = _feat(_crop(img, fx, fy, TILE_HALF))
             dists = [_dist(f, t) for t in legend]
             order = np.argsort(dists)
             row.append(int(order[0]) + 1)
             worst = max(worst, dists[int(order[0])] / max(dists[int(order[1])], 1e-6))
         board.append(tuple(row))
     return tuple(board), worst
+
+
+def calibrate(img):
+    """اگر برش canvas چند پیکسل جابه‌جا باشد، بهترین جابه‌جایی را پیدا می‌کند. (shift, board, worst) یا None."""
+    global _SHIFT
+    best = None
+    for dy in range(-16, 17, 4):
+        for dx in range(-16, 17, 4):
+            b, w = read_board(img, (dx, dy))
+            tiles = sum(1 for r in b for x in r if x)
+            if tiles < 2 or tiles > 8:
+                continue
+            if best is None or w < best[2]:
+                best = ((dx, dy), b, w)
+    if best and best[2] < 0.97:
+        _SHIFT = best[0]
+        return best
+    return None
 
 
 def reconcile(pred, actual):
@@ -233,41 +262,42 @@ JS_RESULT = ("const t=(document.body.innerText||'').toUpperCase();"
 JS_RECT = ("const e=document.querySelector('canvas');if(!e)return null;const c=e.getBoundingClientRect();"
            "return [c.left+window.scrollX,c.top+window.scrollY,c.width,c.height];")
 
-_rect = None
-
-
 def _canvas_image(d):
-    """تصویر سریع فقط از ناحیه‌ی canvas (CDP). اگر canvas دیگر نیست (بازی تمام شده) None برمی‌گرداند."""
-    global _rect
-    if _rect is None:
-        _rect = d.execute_script(JS_RECT)
-        if _rect is None:
-            return None
+    """تصویر سریع فقط از ناحیه‌ی canvas (CDP) با rect تازه. اگر canvas نبود (بازی تمام شد) None."""
+    rect = d.execute_script(JS_RECT)
+    if rect is None:
+        return None
     params = {"format": "jpeg", "quality": 70, "fromSurface": True,
-              "clip": {"x": _rect[0], "y": _rect[1], "width": _rect[2], "height": _rect[3], "scale": 1}}
+              "clip": {"x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3], "scale": 1}}
     try:
         data = d.execute_cdp_cmd("Page.captureScreenshot", dict(params, optimizeForSpeed=True))
     except Exception:
         try:
             data = d.execute_cdp_cmd("Page.captureScreenshot", params)
         except Exception:
-            _rect = None
-            return None if d.execute_script(JS_RECT) is None else _canvas_image(d)
+            return None if d.execute_script(JS_RECT) is None else Image.new("RGB", STD_SIZE)
     return Image.open(io.BytesIO(base64.b64decode(data["data"]))).convert("RGB")
 
 
-def _wait_start(d, log, timeout=12):
-    """منتظر می‌ماند تا انیمیشن «GO!» تمام شود و دو خانه‌ی اولیه‌ی ۱ یا ۲ دیده شود."""
+def _wait_start(d, log, timeout=10):
+    """منتظر می‌ماند تا انیمیشن «GO!» تمام شود و دست‌کم دو خانه‌ی پایدار خوانده شود."""
     end = time.time() + timeout
-    prev = None
+    prev, calibrated = None, False
+    t_cal = time.time() + 4
     while time.time() < end:
         img = _canvas_image(d)
         if img is None:
             return None
         b, worst = read_board(img)
         tiles = [x for r in b for x in r if x]
-        if len(tiles) >= 2 and max(tiles) <= 2 and worst < 0.97 and b == prev:
+        if len(tiles) >= 2 and worst < 0.97 and b == prev:
             return b
+        if not calibrated and time.time() > t_cal:
+            calibrated = True
+            c = calibrate(img)
+            log(f"[2048] calibration: {('shift=%s worst=%.2f' % (c[0], c[2])) if c else 'failed'}")
+            if c:
+                return c[1]
         prev = b
         time.sleep(0.15)
     log("[2048] start screen not recognised; continuing anyway")
@@ -277,16 +307,14 @@ def _wait_start(d, log, timeout=12):
 
 def play(d, seconds=68, log=print):
     """بازی را تا پایان زمان یا ناپدید شدن canvas ادامه می‌دهد. True اگر بازی تمام شد."""
-    global _rect
-    _rect = None
     reset_legend()
     deadline = time.time() + seconds
-    d.execute_script("document.querySelector('canvas').scrollIntoView({block:'center'});")
+    # canvas را طوری بالا بیاور که زیر هدر ثابت صفحه نرود (بالا ≈ ۱۰۰ پیکسل)
+    d.execute_script("const c=document.querySelector('canvas');if(c){window.scrollBy(0,c.getBoundingClientRect().top-100);}")
     time.sleep(0.5)
     board = _wait_start(d, log)
     if board is None:
         log("[2048] canvas gone before start"); return True
-    _rect = None   # بعد از اسکرول دوباره بگیر
     t0 = time.time()
     moves, unreadable, resyncs = 0, 0, 0
     pred = None
