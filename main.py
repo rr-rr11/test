@@ -21,6 +21,7 @@ from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 
 import coinflip
+import coinmatch
 import game2048
 import games_simple
 from session_utils import finish_session, load_session
@@ -37,6 +38,7 @@ START_XP = "//button[contains(translate(normalize-space(.),'start','START'),'STA
 BOTS = {
     "2048 Coins": game2048.play,
     "Coin-Flip": coinflip.play,
+    "Coin-match": coinmatch.play,
     "Lambo Rider": games_simple.play_idle,   # آزمایشی: بدون حرکت
 }
 
