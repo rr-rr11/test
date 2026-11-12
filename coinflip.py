@@ -19,9 +19,8 @@ CY = [161 / 717, 313 / 717, 467 / 717, 620 / 717]
 CARDS = [(r, c) for r in range(4) for c in range(3)]
 HALF = 0.05          # نیم‌اندازه‌ی برش مرکزی هر کارت (نسبت به عرض)
 SAME = 14.0          # فاصله‌ی کمتر از این = «احتمالاً همان سکه» (کارت یکسان ≈ ۰؛ سکه‌های مختلف معمولاً > ۶۰). تأیید نهایی با دیدن ناپدید شدن کارت‌هاست
-BACK_CYAN = 0.03     # کسر پیکسل‌های فیروزه‌ای: پشت کارت ≈ ۰٫۳۸، رو‌شده ≈ ۰، نیمه‌برگشته ≈ ۰٫۱۱
+BACK_DIST = 20.0     # فاصله‌ی امضا تا الگوی پشت‌کارت: پشت‌رو ≤ ۴، هر چهره ≥ ۵۴ (حتی چهره‌ی «R» که فیروزه‌ای است)
 VERIFY_WAIT = 1.3    # بعد از رو شدن کارت دوم صبر کن تا یا ناپدید شوند (جفت درست) یا برگردند (اشتباه)
-BACK_FRAC = 0.2      # کسر فیروزه‌ای بیشتر از این = کارت دوباره پشت‌رو است
 
 
 def _crop(img, idx):
@@ -39,6 +38,19 @@ def _cyan(im):
 
 def _sig(im):
     return np.asarray(im.convert("RGB").resize((12, 12), Image.LANCZOS), dtype=np.float32)
+
+
+_BACK = None
+
+
+def _learn_back(img):
+    """الگوی پشت‌کارت: میانه‌ی امضای ۱۲ کارت در لحظه‌ای که همه پشت‌رو هستند."""
+    global _BACK
+    _BACK = np.median(np.stack([_sig(_crop(img, i)) for i in range(len(CARDS))]), axis=0)
+
+
+def _is_back(img, idx):
+    return float(np.abs(_sig(_crop(img, idx)) - _BACK).mean()) < BACK_DIST
 
 
 def _same(a, b):
@@ -61,17 +73,12 @@ def _face(d, idx):
         img = game2048._canvas_image(d)
         if img is None:
             return "GONE"
-        cr = _crop(img, idx)
-        if _cyan(cr) < BACK_CYAN:
-            s = _sig(cr)
+        if not _is_back(img, idx):
+            s = _sig(_crop(img, idx))
             if prev is not None and float(np.abs(s - prev).mean()) < 6.0:
                 return s          # دو نمونه‌ی پشت‌سرهم یکسان = انیمیشن تمام شده
             prev = s
     return None
-
-
-def _is_back(img, idx):
-    return _cyan(_crop(img, idx)) > BACK_FRAC
 
 
 def play(d, seconds=72, log=print):
@@ -79,6 +86,10 @@ def play(d, seconds=72, log=print):
     deadline = time.time() + seconds
     d.execute_script("const c=document.querySelector('canvas');if(c){window.scrollBy(0,c.getBoundingClientRect().top-100);}")
     time.sleep(4.0)                       # انیمیشن GO!
+    img0 = game2048._canvas_image(d)
+    if img0 is None:
+        return True
+    _learn_back(img0)
     known, matched, neq = {}, set(), {}
     clicks, stalls = 0, 0
 
