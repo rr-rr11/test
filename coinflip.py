@@ -79,11 +79,11 @@ def play(d, seconds=72, log=print):
     deadline = time.time() + seconds
     d.execute_script("const c=document.querySelector('canvas');if(c){window.scrollBy(0,c.getBoundingClientRect().top-100);}")
     time.sleep(4.0)                       # انیمیشن GO!
-    known, matched, neq = {}, set(), set()
-    clicks = 0
+    known, matched, neq = {}, set(), {}
+    clicks, stalls = 0, 0
 
     def same(i, j):
-        return frozenset((i, j)) not in neq and _same(known[i], known[j])
+        return neq.get(frozenset((i, j)), 0) < 2 and _same(known[i], known[j])
 
     def open_card(i):
         nonlocal clicks
@@ -95,7 +95,7 @@ def play(d, seconds=72, log=print):
         return None
 
     def verify(a, b):
-        """بعد از رو کردن دو کارت: True اگر جفت درست بود (کارت‌ها دیگر پشت‌رو نیستند)، False اگر برگشتند، 'GONE' اگر بازی تمام شد."""
+        """بعد از رو کردن هر دو کارت: True اگر جفت درست بود (دیگر پشت‌رو نیستند)، False اگر برگشتند، 'GONE' اگر بازی تمام شد."""
         time.sleep(VERIFY_WAIT)
         img = game2048._canvas_image(d)
         if img is None:
@@ -104,11 +104,42 @@ def play(d, seconds=72, log=print):
             return False
         return True
 
+    def attempt(a, b):
+        """هر دو کارت را رو می‌کند و نتیجه را می‌سنجد. None اگر یکی از کارت‌ها اصلاً باز نشد (حکم نده!)."""
+        for i in (a, b):
+            s = open_card(i)
+            if isinstance(s, str):
+                return "GONE"
+            if s is None:
+                return None
+            known.setdefault(i, s)
+        return verify(a, b)
+
+    def result(pair, r, how=""):
+        nonlocal stalls
+        if r is None:
+            stalls += 1; return
+        if r:
+            matched.update(pair); stalls = 0
+            log(f"[flip] matched {pair} {how}-> {len(matched)//2}/6")
+        else:
+            key = frozenset(pair); neq[key] = neq.get(key, 0) + 1
+            log(f"[flip] {pair} did NOT match (flipped back)")
+
     def finish(tag=""):
         log(f"[flip] game over {tag} after {clicks} clicks, matched={len(matched)//2}/6")
         return True
 
-    while time.time() < deadline and len(matched) < len(CARDS):
+    while time.time() < deadline and len(matched) < len(CARDS) and stalls < 8:
+        remaining = [i for i in range(len(CARDS)) if i not in matched]
+
+        # آخرین دو کارت حتماً یک جفت‌اند، حتی اگر امضایشان فرق کند
+        if len(remaining) == 2:
+            r = attempt(*remaining)
+            if r == "GONE": return finish()
+            result(tuple(remaining), r, "(last two) ")
+            continue
+
         # ۱) جفتِ شناخته‌شده؟
         pair = None
         items = [i for i in known if i not in matched]
@@ -118,59 +149,52 @@ def play(d, seconds=72, log=print):
                     pair = (items[x], items[y]); break
             if pair: break
         if pair:
-            a, b = pair
-            for i in pair:
-                if isinstance(open_card(i), str):
-                    return finish()
-            r = verify(a, b)
+            r = attempt(*pair)
             if r == "GONE": return finish()
-            if r:
-                matched.update(pair); log(f"[flip] matched {pair} (known) -> {len(matched)//2}/6")
-            else:
-                neq.add(frozenset(pair)); log(f"[flip] {pair} looked the same but are NOT a pair")
+            result(pair, r, "(known) ")
             continue
 
         # ۲) کارت ناشناخته‌ی اول
         unknown = [i for i in range(len(CARDS)) if i not in known and i not in matched]
         if not unknown:
-            log("[flip] no unknown cards and no known pair; stopping"); break
+            # همه شناخته‌شده‌اند ولی جفتی نمی‌بینیم: شمارنده‌ی ناجور را صفر کن و نزدیک‌ترین امضاها را امتحان کن
+            neq.clear()
+            cands = sorted(((float(np.abs(known[x] - known[y]).mean()), x, y)
+                            for x in items for y in items if x < y))
+            if not cands:
+                break
+            r = attempt(cands[0][1], cands[0][2])
+            if r == "GONE": return finish()
+            result((cands[0][1], cands[0][2]), r, "(closest) ")
+            continue
         u1 = unknown[0]
         s1 = open_card(u1)
         if isinstance(s1, str):
             return finish()
         if s1 is None:
-            known[u1] = np.full((12, 12, 3), -999, dtype=np.float32); continue
+            stalls += 1; continue
         known[u1] = s1
         partner = next((k for k in known if k != u1 and k not in matched and same(u1, k)), None)
         if partner is not None:
-            if isinstance(open_card(partner), str):
-                return finish()
-            r = verify(u1, partner)
+            r = attempt(u1, partner)
             if r == "GONE": return finish()
-            if r:
-                matched.update((u1, partner)); log(f"[flip] matched {(u1, partner)} -> {len(matched)//2}/6")
-            else:
-                neq.add(frozenset((u1, partner))); log(f"[flip] {(u1, partner)} looked the same but are NOT a pair")
+            result((u1, partner), r)
             continue
 
         # ۳) کارت ناشناخته‌ی دوم
         rest = [i for i in unknown if i != u1]
         if not rest:
-            break
+            continue
         u2 = rest[0]
         s2 = open_card(u2)
         if isinstance(s2, str):
             return finish()
         if s2 is None:
-            known[u2] = np.full((12, 12, 3), -999, dtype=np.float32)
-            time.sleep(VERIFY_WAIT); continue
+            stalls += 1; time.sleep(VERIFY_WAIT); continue
         known[u2] = s2
         r = verify(u1, u2)
         if r == "GONE": return finish()
-        if r:
-            matched.update((u1, u2)); log(f"[flip] matched {(u1, u2)} (lucky) -> {len(matched)//2}/6")
-        elif _same(s1, s2):
-            neq.add(frozenset((u1, u2)))
+        result((u1, u2), r, "(lucky) ")
 
     # پایان: چند ثانیه صبر کن تا صفحه‌ی نتیجه بیاید
     end = time.time() + 6
