@@ -1,7 +1,7 @@
 """
 ربات بازی «Coin-match» (match-3): جدول ۸×۸ از چهار نوع سکه (ETH, DASH, DOGE, BTC).
 با جابه‌جایی دو سکه‌ی مجاور طوری که ۳ سکه‌ی هم‌رنگ در یک خط بیایند، سکه‌ها حذف می‌شوند (+۱۸۰ امتیاز برای هر سکه).
-جابه‌جایی: کلیک روی سکه‌ی اول و بعد کلید جهتی (آزموده شده)؛ اگر اثر نکرد، کشیدن ماوس.
+جابه‌جایی: کشیدن ماوس از سکه‌ی اول به سکه‌ی مجاور (آزموده‌شده). کلید جهتی استفاده نمی‌شود: کلید ↓ صفحه را اسکرول می‌کند و canvas را جابه‌جا می‌کند.
 
 تخته از روی رنگ سکه‌ها خوانده می‌شود و هر بار جابه‌جایی‌ای انتخاب می‌شود که بیشترین سکه را (با آبشار روی خود تخته) حذف کند.
 """
@@ -10,7 +10,6 @@ import time
 import numpy as np
 from selenium.webdriver import ActionChains
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 
 import game2048
 
@@ -115,17 +114,15 @@ def _off(d, cell):
     return int(CX[cell[1]] * w - w / 2), int(CY[cell[0]] * h - h / 2)
 
 
-def _swap_click_key(d, a, b):
-    ox, oy = _off(d, a)
-    key = Keys.ARROW_RIGHT if b[1] > a[1] else Keys.ARROW_DOWN
-    ActionChains(d).move_to_element_with_offset(_canvas(d), ox, oy).click().pause(0.08).send_keys(key).perform()
-
-
 def _swap_drag(d, a, b):
     ax, ay = _off(d, a); bx, by = _off(d, b)
     (ActionChains(d).move_to_element_with_offset(_canvas(d), ax, ay).click_and_hold().pause(0.15)
      .move_by_offset((bx - ax) // 2, (by - ay) // 2).pause(0.1)
      .move_by_offset(bx - ax - (bx - ax) // 2, by - ay - (by - ay) // 2).pause(0.15).release().perform())
+
+
+JS_FIX_SCROLL = ("const c=document.querySelector('canvas');if(!c)return false;"
+                 "const t=c.getBoundingClientRect().top;if(Math.abs(t-100)>3){window.scrollBy(0,t-100);}return true;")
 
 
 def _stable(d, deadline, tries=10):
@@ -150,6 +147,7 @@ def play(d, seconds=75, log=print):
     deadline = time.time() + seconds
     d.execute_script("const c=document.querySelector('canvas');if(c){window.scrollBy(0,c.getBoundingClientRect().top-100);}")
     time.sleep(4.0)                                   # انیمیشن GO!
+    d.execute_script(JS_FIX_SCROLL)
     t0 = time.time()
     moves = no_effect = 0
     while time.time() < deadline:
@@ -163,24 +161,17 @@ def play(d, seconds=75, log=print):
             log("[match] no valid swap on this board (waiting for refill)"); time.sleep(0.6); continue
         score, a, b = swaps[0]
         before = g
-        _swap_click_key(d, a, b)
+        d.execute_script(JS_FIX_SCROLL)
+        _swap_drag(d, a, b)
         moves += 1
         time.sleep(0.5)
         after = _stable(d, deadline)
         if after is None:
             log(f"[match] canvas gone after {moves} moves in {time.time() - t0:.0f}s"); return True
-        if after == before:                           # کلید اثر نکرد؛ با کشیدن امتحان کن
-            _swap_drag(d, a, b)
-            time.sleep(0.5)
-            after = _stable(d, deadline)
-            if after is None:
-                log(f"[match] canvas gone after {moves} moves in {time.time() - t0:.0f}s"); return True
-            if after == before:
-                no_effect += 1
-                if no_effect >= 6:
-                    log("[match] swaps have no effect; stopping"); break
-            else:
-                no_effect = 0
+        if after == before:                           # جابه‌جایی اثر نکرد
+            no_effect += 1
+            if no_effect >= 6:
+                log("[match] swaps have no effect; stopping"); break
         else:
             no_effect = 0
         if moves % 5 == 0:
