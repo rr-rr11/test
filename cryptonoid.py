@@ -8,6 +8,7 @@ import base64
 import io
 import time
 from collections import deque
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
@@ -125,53 +126,108 @@ def predict(hist, now):
     return float(np.clip(_reflect(xs[-1] + vx * (t_land + (now - t[-1]))), PLAY_L, PLAY_R))
 
 
+def _calibrate(d, geom, log):
+    """
+    قبل از رها کردن توپ، پدل را به چپ، راست و مرکز می‌فرستد و پاسخش را اندازه می‌گیرد:
+    آیا پدل به نشانگر ماوس می‌رسد؟ با چه سرعتی؟ خروجی: سرعت تقریبی پدل (px/s) یا None.
+    """
+    speeds, rows = [], []
+    for tx in (120, 700, 413):
+        t_cmd = time.time()
+        _mouse(d, geom, tx, PADDLE_Y)
+        series = []
+        for _ in range(9):
+            img, _g = _frame(d)
+            if img is None:
+                return None
+            p, _b = detect(img)
+            series.append((time.time() - t_cmd, p))
+        pts = [(t, p) for t, p in series if p is not None]
+        rows.append((tx, [(round(t, 2), round(p)) for t, p in pts]))
+        if len(pts) >= 3:
+            sp = max(abs(pts[i + 1][1] - pts[i][1]) / max(1e-3, pts[i + 1][0] - pts[i][0]) for i in range(len(pts) - 1))
+            speeds.append(sp)
+    for tx, r in rows:
+        log(f"[crypto] calibration target={tx}: (seconds, paddle_x) = {r}")
+    v = float(np.median(speeds)) if speeds else None
+    log(f"[crypto] estimated paddle speed ≈ {v:.0f}px/s" if v else "[crypto] paddle speed unknown")
+    return v
+
+
 def play(d, seconds=75, log=print):
     """True اگر بازی تمام شد (canvas ناپدید شد)."""
     deadline = time.time() + seconds
     d.execute_script(JS_FIX_SCROLL)
-    time.sleep(4.0)                               # انیمیشن GO!
+    time.sleep(3.5)                               # انیمیشن GO!
+    img0, geom0 = _frame(d)
+    if img0 is None:
+        return True
+    v_paddle = _calibrate(d, geom0, log)
     hist = deque(maxlen=6)
     t0 = time.time()
     frames = launches = moves = lost = 0
-    target, errs = None, []
+    target, errs, trace = None, [], []
     last_log = t0
     still = 0
     last_click = 0.0
-    while time.time() < deadline:
-        img, geom = _frame(d)
-        if img is None:
-            log(f"[crypto] canvas gone after {time.time()-t0:.0f}s: frames={frames} launches={launches} lost={lost}"); return True
-        now = time.time(); frames += 1
-        paddle, ball = detect(img)
-        if paddle is not None and target is not None:
-            errs.append(abs(paddle - target))
-        if ball is None:
-            hist.clear()
-            if paddle is not None and target is None:
-                target = paddle
-            continue
-        if hist and (abs(ball[0] - hist[-1][1]) + abs(ball[1] - hist[-1][2])) < 2.5:
-            still += 1
-        else:
-            still = 0
-        hist.append((now, ball[0], ball[1]))
-        on_paddle = ball[1] > HIT_Y - 40 and (paddle is None or abs(ball[0] - paddle) < 90)
-        if on_paddle and still >= 2 and now - last_click > 1.0:
-            _click(d, geom, ball[0], 600); launches += 1; last_click = now      # رها کردن توپ
-            hist.clear(); still = 0
-            continue
-        pred = predict(list(hist), now)
-        if pred is None:
-            pred = ball[0]
-        if paddle is not None and ball[1] > HIT_Y + 20:
-            lost += 1 if still == 0 and (not hist or hist[-1][2] > HIT_Y + 20) else 0
-        target = pred
-        _mouse(d, geom, target, PADDLE_Y)
-        moves += 1
-        if now - last_log > 2.0:
-            last_log = now
-            med = float(np.median(errs[-30:])) if errs else -1
-            log(f"[crypto] t={now-t0:.0f}s fps={frames/(now-t0):.1f} ball=({ball[0]:.0f},{ball[1]:.0f}) paddle={paddle if paddle is None else round(paddle)} target={target:.0f} track_err={med:.0f}px")
-    log(f"[crypto] time up: frames={frames} launches={launches} moves={moves}")
-    img, _ = _frame(d)
-    return img is None
+    below = False
+
+    def save_trace():
+        try:
+            Path("debug").mkdir(exist_ok=True)
+            with open("debug/crypto_trace.csv", "w") as f:
+                f.write("t,ball_x,ball_y,paddle_x,target,event\n")
+                for r in trace:
+                    f.write(",".join("" if v is None else (f"{v:.1f}" if isinstance(v, float) else str(v)) for v in r) + "\n")
+        except Exception as e:
+            log(f"[crypto] trace save failed: {e}")
+
+    try:
+        while time.time() < deadline:
+            img, geom = _frame(d)
+            if img is None:
+                log(f"[crypto] canvas gone after {time.time()-t0:.0f}s: frames={frames} launches={launches} lost={lost}"); return True
+            now = time.time(); frames += 1
+            paddle, ball = detect(img)
+            if paddle is not None and target is not None:
+                errs.append(abs(paddle - target))
+            if ball is None:
+                trace.append((now - t0, None, None, paddle, target, "noball"))
+                hist.clear()
+                continue
+            if hist and (abs(ball[0] - hist[-1][1]) + abs(ball[1] - hist[-1][2])) < 2.5:
+                still += 1
+            else:
+                still = 0
+            hist.append((now, ball[0], ball[1]))
+            event = ""
+            if ball[1] > HIT_Y + 22:                      # زیر پدل: توپ از دست رفت
+                if not below:
+                    lost += 1; below = True; event = "LOST"
+            else:
+                below = False
+            on_paddle = ball[1] > HIT_Y - 40 and (paddle is None or abs(ball[0] - paddle) < 90)
+            if on_paddle and still >= 2 and now - last_click > 1.0:
+                _click(d, geom, ball[0], 600); launches += 1; last_click = now      # رها کردن توپ
+                hist.clear(); still = 0
+                trace.append((now - t0, ball[0], ball[1], paddle, target, "LAUNCH"))
+                continue
+            if on_paddle and still >= 1:
+                pred = ball[0]                            # توپ روی پدل است؛ دنبالش نرو (از رانش جلوگیری)
+            else:
+                pred = predict(list(hist), now)
+                if pred is None:
+                    pred = ball[0]
+            target = pred
+            _mouse(d, geom, target, PADDLE_Y)
+            moves += 1
+            trace.append((now - t0, ball[0], ball[1], paddle, target, event))
+            if now - last_log > 2.0:
+                last_log = now
+                med = float(np.median(errs[-30:])) if errs else -1
+                log(f"[crypto] t={now-t0:.0f}s fps={frames/(now-t0):.1f} ball=({ball[0]:.0f},{ball[1]:.0f}) paddle={paddle if paddle is None else round(paddle)} target={target:.0f} track_err={med:.0f}px lost={lost}")
+        log(f"[crypto] time up: frames={frames} launches={launches} moves={moves} lost={lost}")
+        img, _ = _frame(d)
+        return img is None
+    finally:
+        save_trace()
