@@ -89,6 +89,15 @@ def open_games(d):
     end = time.time() + 40
     while time.time() < end and not d.find_elements(By.XPATH, START_XP):
         time.sleep(2)
+    # کارت‌ها تنبل بارگذاری می‌شوند؛ صبر کن تا تعدادشان پایدار شود (یا حداقل ۱۲ تا)
+    end, prev, stable = time.time() + 25, -1, 0
+    while time.time() < end:
+        n = len(d.find_elements(By.XPATH, START_XP))
+        stable = stable + 1 if n == prev else 0
+        if n >= 12 or (n > 0 and stable >= 3):
+            break
+        prev = n
+        time.sleep(1.5)
     return bool(d.find_elements(By.XPATH, START_XP))
 
 
@@ -98,14 +107,19 @@ def card_name(text):
 
 
 def click_card(d, name):
-    for b in d.find_elements(By.XPATH, START_XP):
-        t = d.execute_script(
-            "let e=arguments[0];for(let k=0;k<4&&e.parentElement;k++){e=e.parentElement;}return e.innerText;", b)
-        if card_name(t).lower() == name.lower():
-            d.execute_script("arguments[0].scrollIntoView({block:'center'});", b)
-            time.sleep(0.5)
-            d.execute_script("arguments[0].click();", b)
-            return True
+    """کارت بازی را پیدا و کلیک می‌کند؛ اگر هنوز بارگذاری نشده، صفحه را اسکرول می‌کند و دوباره می‌گردد."""
+    for attempt in range(8):
+        for b in d.find_elements(By.XPATH, START_XP):
+            t = d.execute_script(
+                "let e=arguments[0];for(let k=0;k<4&&e.parentElement;k++){e=e.parentElement;}return e.innerText;", b)
+            if card_name(t).lower() == name.lower():
+                d.execute_script("arguments[0].scrollIntoView({block:'center'});", b)
+                time.sleep(0.5)
+                d.execute_script("arguments[0].click();", b)
+                return True
+        log(f"card {name!r} not visible yet (attempt {attempt + 1}); scrolling")
+        d.execute_script("window.scrollBy(0, 650);")
+        time.sleep(1.5)
     return False
 
 
