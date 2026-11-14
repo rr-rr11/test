@@ -18,6 +18,7 @@ CX = [(173 + 69.1 * i) / 831 for i in range(N)]    # مرکز ستون‌ها (�
 CY = [(62 + 69.4 * j) / 623 for j in range(N)]     # مرکز ردیف‌ها (نسبت به ارتفاع canvas)
 HALF = 14 / 831.0                                  # نیم‌اندازه‌ی ناحیه‌ی نمونه‌برداری رنگ
 PROTOS = {"E": (94, 129, 223), "D": (15, 120, 182), "G": (195, 164, 60), "B": (236, 155, 71)}   # میانگین رنگ از ۱۲۸ سکه‌ی واقعی
+GRAY_M = 0.05      # Monero (نارنجی بالا / خاکستری پایین): کسر پیکسل‌های خاکستری میانی ≈ ۰٫۰۹ تا ۰٫۱۴؛ بقیه‌ی سکه‌ها ≤ ۰٫۰۰۶
 MAX_DIST = 90.0                                    # دورتر از این از همه‌ی رنگ‌ها = خانه‌ی نامطمئن (انیمیشن)
 
 
@@ -30,10 +31,15 @@ def read_grid(img):
         row = ""
         for i in range(N):
             x, y, h = int(CX[i] * W), int(CY[j] * H), max(4, int(HALF * W))
-            c = a[y - h:y + h, x - h:x + h].reshape(-1, 3)
-            c = c[(c.max(axis=1) - c.min(axis=1)) > 60]          # فقط پیکسل‌های رنگی (نه سفید/تیره‌ی داخل سکه)
+            raw = a[y - h:y + h, x - h:x + h].reshape(-1, 3)
+            sat = raw.max(axis=1) - raw.min(axis=1)
+            c = raw[sat > 60]                                       # فقط پیکسل‌های رنگی (نه سفید/تیره‌ی داخل سکه)
             if len(c) < 20:
                 return None
+            gray = float(((sat < 40) & (raw.max(axis=1) > 70) & (raw.max(axis=1) < 165)).mean())
+            if gray > GRAY_M:                                       # Monero (سطح بالاتر بازی)
+                row += "M"
+                continue
             m = c.mean(axis=0)
             k, dist = min(((p, float(np.abs(m - np.array(v)).sum())) for p, v in PROTOS.items()), key=lambda t: t[1])
             if dist > MAX_DIST:
