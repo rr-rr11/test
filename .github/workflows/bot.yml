@@ -8,7 +8,7 @@ on:
         default: "2048 Coins,Coin-Flip,Coin-match"
       rounds:
         description: "چند بار هر بازی اجرا شود"
-        default: "1"
+        default: "3"
   schedule:
     - cron: '23 2,10,18 * * *'   # ۳ بار در روز (UTC) — ساعت دقیق نیست تا با شلوغی اول ساعت برخورد نکند
 
