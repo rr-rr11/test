@@ -4,14 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       games:
-        description: "اسم بازی‌ها با کاما (فعلاً: 2048 Coins)"
-        default: "2048 Coins"
+        description: "اسم بازی‌ها با کاما (2048 Coins, Coin-Flip, Coin-match)"
+        default: "2048 Coins,Coin-Flip,Coin-match"
       rounds:
         description: "چند بار هر بازی اجرا شود"
         default: "1"
-  # schedule فعلاً غیرفعال است تا بازی‌ها تست شوند:
-  # schedule:
-  #   - cron: '0 * * * *'
+  schedule:
+    - cron: '23 2,10,18 * * *'   # ۳ بار در روز (UTC) — ساعت دقیق نیست تا با شلوغی اول ساعت برخورد نکند
 
 concurrency:
   group: rollercoin-session
@@ -20,7 +19,7 @@ concurrency:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -48,9 +47,10 @@ jobs:
         env:
           RC_SESSION: ${{ secrets.RC_SESSION }}
           RC_LOCAL: ${{ secrets.RC_LOCAL }}
-          GAMES: ${{ github.event.inputs.games || '2048 Coins' }}
+          GAMES: ${{ github.event.inputs.games || '2048 Coins,Coin-Flip,Coin-match' }}
           ROUNDS: ${{ github.event.inputs.rounds || '1' }}
           HEADLESS: "1"
+          JITTER: ${{ github.event_name == 'schedule' && '1' || '0' }}
 
       - name: Save session state
         if: always()
