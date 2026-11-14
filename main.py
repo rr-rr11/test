@@ -22,6 +22,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 import coinflip
 import coinmatch
+import cryptonoid
 import game2048
 import games_simple
 from session_utils import finish_session, load_session
@@ -30,6 +31,7 @@ SESSION = os.environ.get("RC_SESSION", "")
 GAMES = [g.strip() for g in os.environ.get("GAMES", "2048 Coins").split(",") if g.strip()]
 ROUNDS = int(os.environ.get("ROUNDS", "1") or "1")
 HEADLESS = os.environ.get("HEADLESS", "1") == "1"
+JITTER = os.environ.get("JITTER", "0") == "1"   # در اجرای زمان‌بندی‌شده: تأخیر تصادفی تا ۴ دقیقه
 
 DEBUG = Path("debug"); DEBUG.mkdir(exist_ok=True)
 START_XP = "//button[contains(translate(normalize-space(.),'start','START'),'START')]"
@@ -39,6 +41,7 @@ BOTS = {
     "2048 Coins": game2048.play,
     "Coin-Flip": coinflip.play,
     "Coin-match": coinmatch.play,
+    "Cryptonoid": cryptonoid.play,          # جدید: هنوز روی بازی واقعی آزموده نشده
     "Lambo Rider": games_simple.play_idle,   # آزمایشی: بدون حرکت
 }
 
@@ -197,6 +200,11 @@ def play_one(d, name, n):
 def main():
     if not SESSION:
         log("RC_SESSION تنظیم نشده است."); return 1
+    if JITTER:
+        import random
+        delay = random.randint(0, 240)
+        log(f"scheduled run: waiting {delay}s before starting")
+        time.sleep(delay)
     d = setup_driver()
     try:
         load_session(d, SESSION)
