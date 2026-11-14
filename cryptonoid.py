@@ -16,7 +16,9 @@ from PIL import Image
 STD = (831, 717)             # اندازه‌ی استاندارد canvas
 PLAY_L, PLAY_R = 22, 809     # دیوارهای کناری (مرکز توپ)
 HIT_Y = 668                  # y مرکز توپ هنگام برخورد با پدل
-PADDLE_Y = 683               # y مرکز پدل
+PADDLE_Y = 683               # y مرکز پدل (فقط برای تشخیص)
+POINTER_Y = 560              # y نشانگر ماوس: پایین‌تر از ~۶۵۰ نوار ثابت ناوبری صفحه روی canvas می‌افتد و رویداد ماوس را می‌خورد
+CAP_Y = 662                  # لکه‌های خاکستری پایین‌تر از این و نزدیک پدل = سرپوش‌های پدل، نه توپ
 HUD_BOTTOM = 66              # بالای این ناحیه‌ی نوار امتیاز/تایمر است
 
 JS_GEOM = ("const e=document.querySelector('canvas');if(!e)return null;const c=e.getBoundingClientRect();"
@@ -97,6 +99,11 @@ def detect(img):
             h = p[:, 0].max() - p[:, 0].min() + 1
             w = p[:, 1].max() - p[:, 1].min() + 1
             ok = 18 <= len(p) <= 220 and 7 <= h <= 24 and 7 <= w <= 24
+            if ok:
+                cyb, cxb = float(p[:, 0].mean()), float(p[:, 1].mean())
+                near_paddle = (paddle is None or abs(cxb - paddle) < 110)
+                if cyb >= CAP_Y and near_paddle:
+                    ok = False                       # سرپوش پدل
             if ok and (best is None or len(p) > best[0]):
                 best = (len(p), float(p[:, 1].mean()), float(p[:, 0].mean()))
         if best:
@@ -134,7 +141,7 @@ def _calibrate(d, geom, log):
     speeds, rows = [], []
     for tx in (120, 700, 413):
         t_cmd = time.time()
-        _mouse(d, geom, tx, PADDLE_Y)
+        _mouse(d, geom, tx, POINTER_Y)
         series = []
         for _ in range(9):
             img, _g = _frame(d)
@@ -208,7 +215,7 @@ def play(d, seconds=75, log=print):
                 below = False
             on_paddle = ball[1] > HIT_Y - 40 and (paddle is None or abs(ball[0] - paddle) < 90)
             if on_paddle and still >= 2 and now - last_click > 1.0:
-                _click(d, geom, ball[0], 600); launches += 1; last_click = now      # رها کردن توپ
+                _click(d, geom, ball[0], POINTER_Y); launches += 1; last_click = now      # رها کردن توپ
                 hist.clear(); still = 0
                 trace.append((now - t0, ball[0], ball[1], paddle, target, "LAUNCH"))
                 continue
@@ -219,7 +226,7 @@ def play(d, seconds=75, log=print):
                 if pred is None:
                     pred = ball[0]
             target = pred
-            _mouse(d, geom, target, PADDLE_Y)
+            _mouse(d, geom, target, POINTER_Y)
             moves += 1
             trace.append((now - t0, ball[0], ball[1], paddle, target, event))
             if now - last_log > 2.0:
