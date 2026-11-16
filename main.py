@@ -191,11 +191,18 @@ def claim_reward(d):
 
 def play_one(d, name, n):
     tag = f"{name.replace(' ', '_')}_{n}"
-    if not open_games(d):
-        log("games page not available (logged out?)"); snap(d, f"{tag}_nogames"); return False
-    collect_bonus(d, 3)
-    if not click_card(d, name):
-        log(f"card not found: {name}"); snap(d, f"{tag}_nocard"); return False
+    for attempt in range(1, 4):
+        if not open_games(d):
+            log("games page not available (logged out?)"); snap(d, f"{tag}_nogames"); return False
+        collect_bonus(d, 3)
+        if click_card(d, name):
+            break
+        # بعد از هر بازی، کارتش حدود یک دقیقه غیرفعال می‌شود؛ صبر می‌کنیم و صفحه را دوباره می‌گیریم
+        log(f"card {name!r} not available (attempt {attempt}/3); waiting 50s then reloading")
+        snap(d, f"{tag}_nocard{attempt}")
+        time.sleep(50)
+    else:
+        log(f"card not found: {name}"); return False
     end = time.time() + 40
     while time.time() < end and not d.find_elements(By.CSS_SELECTOR, "canvas"):
         time.sleep(2)
@@ -223,15 +230,19 @@ def main():
     try:
         load_session(d, SESSION)
         ok = 0
+        games = []
         for name in GAMES:
-            if name not in BOTS:
-                log(f"برای «{name}» هنوز ربات نوشته نشده؛ رد شد."); continue
-            for n in range(1, ROUNDS + 1):
-                log(f"=== {name} (round {n}/{ROUNDS}) ===")
+            if name in BOTS:
+                games.append(name)
+            else:
+                log(f"برای «{name}» هنوز ربات نوشته نشده؛ رد شد.")
+        for n in range(1, ROUNDS + 1):                 # دور به دور؛ هر دور همه‌ی بازی‌ها به ترتیب
+            for name in games:
+                log(f"=== round {n}/{ROUNDS}: {name} ===")
                 try:
                     ok += 1 if play_one(d, name, n) else 0
                 except Exception:
-                    logging.exception("game failed"); snap(d, f"fatal_{n}")
+                    logging.exception("game failed"); snap(d, f"fatal_{name.replace(' ', '_')}_{n}")
         log(f"done: {ok} reward(s) claimed")
         return 0
     finally:
