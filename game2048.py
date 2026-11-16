@@ -9,6 +9,7 @@ import io
 import math
 import random
 import time
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
@@ -501,6 +502,15 @@ def best_moves(board):
     return [d for _, d in res]
 
 
+def _dump(img, name):
+    """عکس میان‌بازی برای عیب‌یابی (در پوشه‌ی debug می‌رود و با artifact می‌آید)."""
+    try:
+        Path("debug").mkdir(exist_ok=True)
+        img.save(f"debug/{name}.png")
+    except Exception:
+        pass
+
+
 # ---------- تعامل با مرورگر ----------
 KEYS = [Keys.ARROW_LEFT, Keys.ARROW_UP, Keys.ARROW_RIGHT, Keys.ARROW_DOWN]
 JS_RESULT = ("const t=(document.body.innerText||'').toUpperCase();"
@@ -617,6 +627,8 @@ def play(d, seconds=68, log=print):
         ActionChains(d).send_keys(KEYS[order[0]]).perform()
         pred = move(board, order[0])
         moves += 1
+        if moves in (6, 45, 95):
+            _dump(img, f"2048_move{moves}")
         if moves % 20 == 0:
             el = time.time() - t0
             log(f"[2048] moves={moves} t={el:.0f}s ({el/moves:.2f}s/move) max_level={max(max(r) for r in board)} resyncs={resyncs}")
