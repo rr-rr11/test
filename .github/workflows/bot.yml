@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       games:
-        description: "اسم بازی‌ها با کاما (2048 Coins, Coin-Flip, Coin-match)"
-        default: "2048 Coins,Coin-Flip,Coin-match"
+        description: "اسم بازی‌ها با کاما (2048 Coins, Coin-Flip, Coin-match, Cryptonoid)"
+        default: "2048 Coins,Coin-Flip,Coin-match,Cryptonoid"
       rounds:
         description: "چند بار هر بازی اجرا شود"
-        default: "3"
+        default: "2"
   schedule:
     - cron: '23 2,10,18 * * *'   # ۳ بار در روز (UTC) — ساعت دقیق نیست تا با شلوغی اول ساعت برخورد نکند
 
@@ -19,7 +19,7 @@ concurrency:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 75
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -47,8 +47,8 @@ jobs:
         env:
           RC_SESSION: ${{ secrets.RC_SESSION }}
           RC_LOCAL: ${{ secrets.RC_LOCAL }}
-          GAMES: ${{ github.event.inputs.games || '2048 Coins,Coin-Flip,Coin-match' }}
-          ROUNDS: ${{ github.event.inputs.rounds || '1' }}
+          GAMES: ${{ github.event.inputs.games || '2048 Coins,Coin-Flip,Coin-match,Cryptonoid' }}
+          ROUNDS: ${{ github.event.inputs.rounds || '2' }}
           HEADLESS: "1"
           JITTER: ${{ github.event_name == 'schedule' && '1' || '0' }}
 
