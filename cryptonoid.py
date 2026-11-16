@@ -118,19 +118,25 @@ def _reflect(x):
 
 
 def predict(hist, now):
-    """محل فرود توپ روی پدل (x) از تاریخچه‌ی (t, x, y). None اگر نمی‌شود فهمید."""
-    pts = [p for p in hist if now - p[0] < 0.7]
+    """
+    جای پدل برای گرفتن توپ. پدل بی‌درنگ دنبال ماوس می‌آید (در کالیبراسیون ثابت شد)، پس لازم نیست محل فرود
+    را با برگشت از دیوار و آجر حدس بزنیم؛ کافی است همیشه زیر توپ باشیم و فقط تأخیر ~۰٫۱ ثانیه‌ی عکس‌برداری را
+    با سرعت لحظه‌ای (از دو نقطه‌ی آخر) جبران کنیم. اگر هنوز دو نقطه نداریم None.
+    """
+    pts = list(hist)
     if len(pts) < 2:
         return None
-    t = np.array([p[0] for p in pts]); xs = np.array([p[1] for p in pts]); ys = np.array([p[2] for p in pts])
-    if t[-1] - t[0] < 0.05:
+    (t1, x1, y1), (t2, x2, y2) = pts[-2], pts[-1]
+    dt = max(1e-3, t2 - t1)
+    if dt > 0.5:
         return None
-    vx = float(np.polyfit(t, xs, 1)[0]); vy = float(np.polyfit(t, ys, 1)[0])
-    x, y = xs[-1] + vx * (now - t[-1]) * 0.0, ys[-1]
-    if vy < 30:                                   # بالا می‌رود یا ایستاده: همان‌جا دنبالش برو
-        return float(np.clip(_reflect(xs[-1] + vx * 0.25), PLAY_L, PLAY_R))
-    t_land = max(0.0, (HIT_Y - y) / vy) - (now - t[-1])
-    return float(np.clip(_reflect(xs[-1] + vx * (t_land + (now - t[-1]))), PLAY_L, PLAY_R))
+    vx = max(-1200.0, min(1200.0, (x2 - x1) / dt))
+    vy = (y2 - y1) / dt
+    lead = 0.10 if vy > 0 else 0.06                # پایین‌رو: جلوتر؛ بالارو: کمتر
+    if vy > 30:
+        lead = min(lead, max(0.0, (HIT_Y - y2) / vy))   # از لحظه‌ی برخورد جلوتر نرو
+    x = x2 + vx * (lead + (now - t2))
+    return float(np.clip(_reflect(x), PLAY_L, PLAY_R))
 
 
 def _calibrate(d, geom, log):
