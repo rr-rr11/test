@@ -135,6 +135,16 @@ def page_text(d):
     return d.execute_script("return document.body.innerText || ''")
 
 
+def log_pc_status(d, tag):
+    """وضعیت سطح PC را از بالای صفحه‌ی بازی‌ها در لاگ می‌نویسد (برای پیگیری بالا رفتن سطح)."""
+    try:
+        keys = ("pc ", "power holding", "level reset", "next pc level")
+        lines = [ln.strip() for ln in page_text(d).split("\n") if any(k in ln.lower() for k in keys)]
+        log(f"[pc:{tag}] " + " | ".join(lines[:5]))
+    except Exception as e:
+        log(f"[pc:{tag}] unavailable: {e}")
+
+
 def collect_bonus(d, wait=8):
     """پاپ‌آپ «CONGRATULATIONS / Free power ... COLLECT» را (فقط اگر ظاهر شد) می‌بندد و دکمه‌ی COLLECT را می‌زند."""
     JS = """
@@ -230,6 +240,8 @@ def main():
     try:
         load_session(d, SESSION)
         ok = 0
+        if open_games(d):
+            log_pc_status(d, "start")
         games = []
         for name in GAMES:
             if name in BOTS:
@@ -243,6 +255,8 @@ def main():
                     ok += 1 if play_one(d, name, n) else 0
                 except Exception:
                     logging.exception("game failed"); snap(d, f"fatal_{name.replace(' ', '_')}_{n}")
+        if open_games(d):
+            log_pc_status(d, "end")
         log(f"done: {ok} reward(s) claimed")
         return 0
     finally:
