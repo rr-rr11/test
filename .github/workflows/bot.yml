@@ -8,9 +8,9 @@ on:
         default: "2048 Coins,Coin-Flip,Coin-match,Cryptonoid"
       rounds:
         description: "چند بار هر بازی اجرا شود"
-        default: "2"
+        default: "3"
   schedule:
-    - cron: '23 2,10,18 * * *'   # ۳ بار در روز (UTC) — ساعت دقیق نیست تا با شلوغی اول ساعت برخورد نکند
+    - cron: '17 */2 * * *'       # هر ۲ ساعت (دقیقه‌ی ۱۷ تا با شلوغی اول ساعت برخورد نکند)
 
 concurrency:
   group: rollercoin-session
@@ -19,7 +19,7 @@ concurrency:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 60
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -48,7 +48,7 @@ jobs:
           RC_SESSION: ${{ secrets.RC_SESSION }}
           RC_LOCAL: ${{ secrets.RC_LOCAL }}
           GAMES: ${{ github.event.inputs.games || '2048 Coins,Coin-Flip,Coin-match,Cryptonoid' }}
-          ROUNDS: ${{ github.event.inputs.rounds || '2' }}
+          ROUNDS: ${{ github.event.inputs.rounds || '3' }}
           HEADLESS: "1"
           JITTER: ${{ github.event_name == 'schedule' && '1' || '0' }}
 
