@@ -8,9 +8,9 @@ on:
         default: "2048 Coins,Coin-Flip,Coin-match,Cryptonoid"
       rounds:
         description: "چند بار هر بازی اجرا شود"
-        default: "3"
+        default: "1"
   schedule:
-    - cron: '17 */2 * * *'       # هر ۲ ساعت (دقیقه‌ی ۱۷ تا با شلوغی اول ساعت برخورد نکند)
+    - cron: '17 */1 * * *'       # هر ۲ ساعت (دقیقه‌ی ۱۷ تا با شلوغی اول ساعت برخورد نکند)
 
 concurrency:
   group: rollercoin-session
