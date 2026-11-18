@@ -18,13 +18,16 @@ PLAY_L, PLAY_R = 22, 809     # دیوارهای کناری (مرکز توپ)
 HIT_Y = 668                  # y مرکز توپ هنگام برخورد با پدل
 PADDLE_Y = 683               # y مرکز پدل (فقط برای تشخیص)
 POINTER_Y = 560              # y نشانگر ماوس: پایین‌تر از ~۶۵۰ نوار ثابت ناوبری صفحه روی canvas می‌افتد و رویداد ماوس را می‌خورد
+MAX_BALL_Y = 688             # لکه‌های پایین‌تر از این (آیکن‌های نوار ناوبری ثابت صفحه) هرگز توپ نیستند
 CAP_Y = 662                  # لکه‌های خاکستری پایین‌تر از این و نزدیک پدل = سرپوش‌های پدل، نه توپ
 HUD_BOTTOM = 66              # بالای این ناحیه‌ی نوار امتیاز/تایمر است
 
 JS_GEOM = ("const e=document.querySelector('canvas');if(!e)return null;const c=e.getBoundingClientRect();"
            "return [c.left,c.top,c.width,c.height,window.scrollX,window.scrollY];")
+# canvas را بالا ببر (بالای آن ۲۰ پیکسل از بالای viewport): هدر ثابت فقط نوار امتیاز/تایمر را می‌پوشاند، و
+# نوار ناوبری ثابت پایین (آیکن‌های خانه/سبد) دیگر روی پدل و توپ نمی‌افتد (در ۱۰۰ پیکسل، آیکن خانه زیر پدل بود).
 JS_FIX_SCROLL = ("const c=document.querySelector('canvas');if(!c)return false;"
-                 "const t=c.getBoundingClientRect().top;if(Math.abs(t-100)>3){window.scrollBy(0,t-100);}return true;")
+                 "const t=c.getBoundingClientRect().top;if(Math.abs(t-20)>3){window.scrollBy(0,t-20);}return true;")
 
 
 def _frame(d):
@@ -97,7 +100,7 @@ def _blobs(mask, min_px, max_px, lo, hi):
     return out
 
 
-def detect(img, ref=None, near=None):
+def detect(img, ref=None, near=None, ignore=()):
     """
     (مرکز x پدل یا None، (x, y) توپ یا None).
     توپ: ۱) لکه‌ی خاکستری روشن (به‌جز سرپوش‌های پدل)؛ ۲) اگر ref (تصویر مرجع بدون توپ در حال پرواز) داده شود،
@@ -116,6 +119,8 @@ def detect(img, ref=None, near=None):
             paddle = float((np.percentile(xs, 2) + np.percentile(xs, 98)) / 2)
 
     def pick(cands):
+        cands = [c for c in cands if c[2] <= MAX_BALL_Y and
+                 all((c[1] - ix) ** 2 + (c[2] - iy) ** 2 > 28 ** 2 for ix, iy in ignore)]
         if not cands:
             return None
         if near is not None:
@@ -219,6 +224,7 @@ def play(d, seconds=75, log=print):
     dumped = 0
     stat = np.zeros((STD[1], STD[0]), dtype=np.uint8) if ref is not None else None
     prev_a = None
+    ignore = []
     t0 = time.time()
     frames = launches = moves = lost = 0
     target, errs, trace = None, [], []
@@ -245,7 +251,7 @@ def play(d, seconds=75, log=print):
             now = time.time(); frames += 1
             near = (hist[-1][1], hist[-1][2]) if hist and now - hist[-1][0] < 0.4 else None
             a_now = np.asarray(img, dtype=np.int16)
-            paddle, ball = detect(a_now, ref, near)
+            paddle, ball = detect(a_now, ref, near, ignore)
             if ref is not None:
                 if prev_a is not None:
                     stable = np.abs(a_now - prev_a).sum(axis=2) < 30
@@ -283,6 +289,10 @@ def play(d, seconds=75, log=print):
             else:
                 below = False
             on_paddle = ball[1] > HIT_Y - 40 and (paddle is None or abs(ball[0] - paddle) < 90)
+            if still >= 25 and not on_paddle:             # ۲٫۵ ثانیه کاملاً ثابت و دور از پدل: مصنوع، نه توپ
+                ignore.append((ball[0], ball[1])); hist.clear(); still = 0
+                log(f"[crypto] ignoring static object at ({ball[0]:.0f},{ball[1]:.0f})")
+                continue
             if on_paddle and slow and still >= 2 and now - last_click > 1.0:
                 _click(d, geom, ball[0], POINTER_Y); launches += 1; last_click = now      # رها کردن توپ
                 hist.clear(); still = 0
