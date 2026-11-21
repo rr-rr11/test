@@ -31,9 +31,14 @@ SESSION = os.environ.get("RC_SESSION", "")
 GAMES = [g.strip() for g in os.environ.get("GAMES", "2048 Coins").split(",") if g.strip()]
 ROUNDS = int(os.environ.get("ROUNDS", "1") or "1")
 HEADLESS = os.environ.get("HEADLESS", "1") == "1"
+RUN_BUDGET = int(os.environ.get("RUN_BUDGET_MIN", "50")) * 60   # بیش از این در یک اجرا شروع بازی جدید نکن
+COOLDOWN_WIN = 620     # بعد از برد، کارت همان بازی حدود ۱۰ دقیقه غیرفعال می‌ماند (از لاگ‌ها)
+COOLDOWN_LOSS = 310    # بعد از باخت حدود ۵ دقیقه
 JITTER = os.environ.get("JITTER", "0") == "1"   # در اجرای زمان‌بندی‌شده: تأخیر تصادفی تا ۴ دقیقه
 
 DEBUG = Path("debug"); DEBUG.mkdir(exist_ok=True)
+T0 = time.time()
+cool = {}              # اسم بازی -> زمانی که کارتش احتمالاً دوباره فعال می‌شود
 START_XP = "//button[contains(translate(normalize-space(.),'start','START'),'START')]"
 
 # بازی -> تابع بازی‌کننده (driver, seconds, log)
@@ -41,9 +46,18 @@ BOTS = {
     "2048 Coins": game2048.play,
     "Coin-Flip": coinflip.play,
     "Coin-match": coinmatch.play,
-    "Cryptonoid": cryptonoid.play,          # جدید: هنوز روی بازی واقعی آزموده نشده
-    "Lambo Rider": games_simple.play_idle,   # آزمایشی: بدون حرکت
+    "Cryptonoid": cryptonoid.play,
+    # --- بازی‌های آزمایشی: بی‌حرکت + عکس میان‌بازی؛ فقط برای شناسایی (در برنامه‌ی خودکار نیستند) ---
+    "Token Blaster": games_simple.make_idle("Token Blaster"),
+    "Coin Fisher": games_simple.make_idle("Coin Fisher"),
+    "Crypto Hamster": games_simple.make_idle("Crypto Hamster"),
+    "Hamster Climber": games_simple.make_idle("Hamster Climber"),
+    "Flappy Rocket": games_simple.make_idle("Flappy Rocket"),
+    "Lambo Rider": games_simple.make_idle("Lambo Rider"),
 }
+
+# محل دکمه‌ی START داخل خود بازی (نسبت به canvas)؛ بیشتر بازی‌ها وسط‌اند ولی بعضی پایین
+START_POS = {"Coinclick": (0.5, 0.80), "Hamster Climber": (0.5, 0.88)}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("rc-bot").info
@@ -199,33 +213,66 @@ def claim_reward(d):
     return True
 
 
-def play_one(d, name, n):
-    tag = f"{name.replace(' ', '_')}_{n}"
-    for attempt in range(1, 4):
+def time_left():
+    return RUN_BUDGET - (time.time() - T0)
+
+
+def wait_cooldown(name):
+    """اگر هنوز زود است، تا فعال شدن دوباره‌ی کارت این بازی صبر می‌کند. False اگر وقت اجرا کافی نیست."""
+    wait = cool.get(name, 0) - time.time()
+    if wait <= 0:
+        return True
+    if wait > time_left() - 240:
+        log(f"{name}: cooldown {wait:.0f}s is longer than the remaining run budget; skipping")
+        return False
+    log(f"{name}: cooling down; waiting {wait:.0f}s")
+    time.sleep(wait)
+    return True
+
+
+def start_game(d, name, tag):
+    """کارت را باز می‌کند و صبر می‌کند تا canvas بازی بیاید. اگر کارت هنوز غیرفعال بود، چند بار تلاش می‌کند."""
+    for attempt in range(1, 7):
+        if time_left() < 150:
+            return False
         if not open_games(d):
             log("games page not available (logged out?)"); snap(d, f"{tag}_nogames"); return False
         collect_bonus(d, 3)
         if click_card(d, name):
-            break
-        # بعد از هر بازی، کارتش حدود یک دقیقه غیرفعال می‌شود؛ صبر می‌کنیم و صفحه را دوباره می‌گیریم
-        log(f"card {name!r} not available (attempt {attempt}/3); waiting 50s then reloading")
-        snap(d, f"{tag}_nocard{attempt}")
-        time.sleep(50)
-    else:
-        log(f"card not found: {name}"); return False
-    end = time.time() + 40
-    while time.time() < end and not d.find_elements(By.CSS_SELECTOR, "canvas"):
-        time.sleep(2)
+            end = time.time() + 30
+            while time.time() < end and not d.find_elements(By.CSS_SELECTOR, "canvas"):
+                time.sleep(2)
+            if d.find_elements(By.CSS_SELECTOR, "canvas"):
+                return True
+            log(f"{name}: clicked START but the game did not open (attempt {attempt}/6)")
+            snap(d, f"{tag}_noopen{attempt}")
+        else:
+            log(f"{name}: card not available (attempt {attempt}/6); waiting 45s")
+            snap(d, f"{tag}_nocard{attempt}")
+        time.sleep(45)
+    return False
+
+
+def play_one(d, name, n):
+    tag = f"{name.replace(' ', '_')}_{n}"
+    if not wait_cooldown(name):
+        return False
+    if not start_game(d, name, tag):
+        log(f"could not start: {name}")
+        cool[name] = time.time() + 60
+        return False
     time.sleep(6)
     dismiss_overlays(d)
     snap(d, f"{tag}_menu")
-    click_rel(d, 0.5, 0.42)                      # دکمه‌ی START داخل خود بازی
+    click_rel(d, *START_POS.get(name, (0.5, 0.42)))   # دکمه‌ی START داخل خود بازی
     time.sleep(3)
     snap(d, f"{tag}_started")
     finished = BOTS[name](d, 72, log)
     snap(d, f"{tag}_end")
     log(f"{name}: finished={finished}")
-    return claim_reward(d)
+    won = claim_reward(d)
+    cool[name] = time.time() + (COOLDOWN_WIN if won else COOLDOWN_LOSS)
+    return won
 
 
 def main():
@@ -250,6 +297,8 @@ def main():
                 log(f"برای «{name}» هنوز ربات نوشته نشده؛ رد شد.")
         for n in range(1, ROUNDS + 1):                 # دور به دور؛ هر دور همه‌ی بازی‌ها به ترتیب
             for name in games:
+                if time_left() < 240:
+                    log(f"run budget almost used up ({(time.time() - T0) / 60:.0f} min); stopping"); break
                 log(f"=== round {n}/{ROUNDS}: {name} ===")
                 try:
                     ok += 1 if play_one(d, name, n) else 0
