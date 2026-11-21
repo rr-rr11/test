@@ -95,7 +95,7 @@ def _blobs(mask, min_px, max_px, lo, hi):
         gy = [c[0] for c in comp]; gx = [c[1] for c in comp]
         h = (max(gy) - min(gy) + 1) * 6
         w = (max(gx) - min(gx) + 1) * 6
-        if min_px <= n_px <= max_px and lo - 6 <= h <= hi + 6 and lo - 6 <= w <= hi + 6:
+        if min_px <= n_px <= max_px and lo - 6 <= h <= hi + 12 and lo - 6 <= w <= hi + 12:
             out.append((n_px, float(sum(sx[c] for c in comp)) / n_px, float(sum(sy[c] for c in comp)) / n_px))
     return out
 
@@ -130,16 +130,19 @@ def detect(img, ref=None, near=None, ignore=()):
     def drop_caps(cands):
         return [c for c in cands if not (c[2] >= CAP_Y and (paddle is None or abs(c[1] - paddle) < 110))]
 
-    # ۱) خاکستری روشن
+    # ۱) خاکستری روشن. توپ در پرواز دُمِ محوشونده (کومت) دارد که تا ~۶۰ پیکسل کشیده می‌شود؛ سر توپ روشن‌ترین
+    #    بخش است (min-channel ≈ ۱۷۰ تا ۲۰۵، دُم ≈ ۱۴۰ تا ۱۷۷). با آستانه‌ی بالا فقط سر جدا می‌شود.
     mn = np.minimum(np.minimum(R, G), B)
     mx = np.maximum(np.maximum(R, G), B)
-    gr = (mn > 150) & ((mx - mn) < 35)
-    gr[:HUD_BOTTOM, :] = False
-    gr[:, :20] = False
-    gr[:, STD[0] - 20:] = False
-    c = pick(drop_caps(_blobs(gr, 15, 220, 7, 24)))
-    if c:
-        return paddle, (c[1], c[2])
+    lowsat = (mx - mn) < 45
+    for thr in (190, 172, 150):
+        gr = lowsat & (mn > thr)
+        gr[:HUD_BOTTOM, :] = False
+        gr[:, :20] = False
+        gr[:, STD[0] - 20:] = False
+        c = pick(drop_caps(_blobs(gr, 12, 220, 7, 26)))
+        if c:
+            return paddle, (c[1], c[2])
     # ۲) حرکت نسبت به تصویر مرجع (مستقل از رنگ)
     if ref is not None:
         diff = np.abs(a - ref).sum(axis=2) > 80
@@ -219,8 +222,7 @@ def play(d, seconds=75, log=print):
         return True
     v_paddle = _calibrate(d, geom0, log)
     hist = deque(maxlen=6)
-    img_ref, _g = _frame(d)                       # تصویر مرجع: توپ روی پدل، آجرها سالم
-    ref = np.asarray(img_ref, dtype=np.int16) if img_ref is not None else None
+    ref = None          # تشخیص حرکت مبتنی بر مرجع خاموش است (کند بود و لازم نشد)
     dumped = 0
     stat = np.zeros((STD[1], STD[0]), dtype=np.uint8) if ref is not None else None
     prev_a = None
@@ -279,7 +281,7 @@ def play(d, seconds=75, log=print):
             if hist and now - hist[-1][0] < 0.5:
                 dt = max(1e-3, now - hist[-1][0])
                 speed = ((ball[0] - hist[-1][1]) ** 2 + (ball[1] - hist[-1][2]) ** 2) ** 0.5 / dt
-            slow = speed is not None and speed < 80
+            slow = speed is not None and speed < 150 and (HIT_Y - 20) <= ball[1] <= (HIT_Y - 4)
             still = still + 1 if slow else 0
             hist.append((now, ball[0], ball[1]))
             event = ""
