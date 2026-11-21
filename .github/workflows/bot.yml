@@ -10,7 +10,7 @@ on:
         description: "چند بار هر بازی اجرا شود"
         default: "1"
   schedule:
-    - cron: '17 */1 * * *'       # هر ۲ ساعت (دقیقه‌ی ۱۷ تا با شلوغی اول ساعت برخورد نکند)
+    - cron: '17 * * * *'         # هر ساعت (دقیقه‌ی ۱۷ تا با شلوغی اول ساعت برخورد نکند)
 
 concurrency:
   group: rollercoin-session
@@ -48,7 +48,7 @@ jobs:
           RC_SESSION: ${{ secrets.RC_SESSION }}
           RC_LOCAL: ${{ secrets.RC_LOCAL }}
           GAMES: ${{ github.event.inputs.games || '2048 Coins,Coin-Flip,Coin-match,Cryptonoid' }}
-          ROUNDS: ${{ github.event.inputs.rounds || '3' }}
+          ROUNDS: ${{ github.event.inputs.rounds || '1' }}
           HEADLESS: "1"
           JITTER: ${{ github.event_name == 'schedule' && '1' || '0' }}
 
