@@ -156,6 +156,71 @@ def detect(img, ref=None, near=None, ignore=()):
     return paddle, None
 
 
+BX = [117 + 83.9 * c for c in range(8)]      # مرکز ستون آجرها (x)
+BY = [156, 233, 311]                          # مرکز ردیف آجرها (y)؛ ردیف ۲ پایین‌ترین است
+AIM_MAX = 38.0                                # حداکثر فاصله‌ی ضربه از مرکز پدل (px)؛ بیشتر از این خطر از دست رفتن توپ دارد
+REBOUND_COEF = 4.6                            # از ردیابی واقعی: vx_out ≈ 0.93·vx_in + 4.6·offset
+V_UP = 430.0                                  # سرعت عمودی توپ (px/s)
+
+
+def bricks_present(a):
+    """مجموعه‌ی آجرهای باقی‌مانده {(ردیف، ستون)} از روی پیکسل‌های سبز."""
+    R, G, B = a[..., 0], a[..., 1], a[..., 2]
+    mask = (G > 120) & (R < 70) & (B < 120)
+    out = set()
+    for r in range(3):
+        y0, y1 = int(BY[r] - 24), int(BY[r] + 24)
+        for c in range(8):
+            x0, x1 = int(BX[c] - 24), int(BX[c] + 24)
+            if mask[y0:y1, x0:x1].sum() > 400:
+                out.add((r, c))
+    return out
+
+
+def aim_offset(x_land, vx_in, bricks):
+    """
+    چه‌قدر از مرکز پدل به توپ ضربه بزنیم تا بعد از برگشت به سمت آجری برود که سریع‌تر از بقیه برمی‌گردد:
+    پایین‌ترین ردیف (رفت‌وبرگشت کوتاه‌تر) و نزدیک‌ترین ستون. offset = x_توپ − x_پدل؛ مثبت = توپ به راست می‌رود.
+    """
+    if not bricks:
+        return 0.0
+    best = None
+    for (r, c) in bricks:
+        dx = BX[c] - x_land
+        t_up = (HIT_Y - BY[r]) / V_UP
+        need = dx / t_up
+        if abs(need) > 330:
+            continue                                # با این زاویه نمی‌رسیم
+        score = r * 1000 - abs(dx)
+        if best is None or score > best[0]:
+            best = (score, need)
+    if best is None:
+        r, c = min(bricks, key=lambda b: abs(BX[b[1]] - x_land))
+        need = max(-330.0, min(330.0, (BX[c] - x_land) / ((HIT_Y - BY[r]) / V_UP)))
+    else:
+        need = best[1]
+    off = (need - 0.93 * vx_in) / REBOUND_COEF
+    return float(max(-AIM_MAX, min(AIM_MAX, off)))
+
+
+def kinematics(hist, now):
+    """(vx, vy, x_land) از دو نقطه‌ی آخر؛ x_land محل فرود توپ روی خط پدل (با برگشت از دیوارها). None اگر کافی نیست."""
+    pts = list(hist)
+    if len(pts) < 2:
+        return None
+    (t1, x1, y1), (t2, x2, y2) = pts[-2], pts[-1]
+    dt = max(1e-3, t2 - t1)
+    if dt > 0.5:
+        return None
+    vx = max(-1200.0, min(1200.0, (x2 - x1) / dt))
+    vy = (y2 - y1) / dt
+    if vy < 60:
+        return vx, vy, None
+    t_land = max(0.0, (HIT_Y - y2) / vy - (now - t2))
+    x_land = float(np.clip(_reflect(x2 + vx * (t_land + (now - t2))), PLAY_L, PLAY_R))
+    return vx, vy, x_land
+
+
 def _reflect(x):
     width = PLAY_R - PLAY_L
     u = (x - PLAY_L) % (2 * width)
@@ -228,7 +293,7 @@ def play(d, seconds=75, log=print):
     prev_a = None
     ignore = []
     t0 = time.time()
-    frames = launches = moves = lost = 0
+    frames = launches = moves = lost = aimed = 0
     target, errs, trace = None, [], []
     last_log = t0
     still = 0
@@ -253,6 +318,7 @@ def play(d, seconds=75, log=print):
             now = time.time(); frames += 1
             near = (hist[-1][1], hist[-1][2]) if hist and now - hist[-1][0] < 0.4 else None
             a_now = np.asarray(img, dtype=np.int16)
+            bricks = bricks_present(a_now)
             paddle, ball = detect(a_now, ref, near, ignore)
             if ref is not None:
                 if prev_a is not None:
@@ -306,6 +372,11 @@ def play(d, seconds=75, log=print):
                 pred = predict(list(hist), now)
                 if pred is None:
                     pred = ball[0]
+                kin = kinematics(hist, now)
+                if kin and kin[2] is not None and kin[1] > 150 and 430 <= ball[1] <= HIT_Y and bricks:
+                    off = aim_offset(kin[2], kin[0], bricks)      # هدف‌گیری: از کنار پدل ضربه بزن تا به آجر برود
+                    pred = float(np.clip(kin[2] - off, PLAY_L, PLAY_R))
+                    aimed += 1
             target = pred
             _mouse(d, geom, target, POINTER_Y)
             moves += 1
@@ -313,7 +384,7 @@ def play(d, seconds=75, log=print):
             if now - last_log > 2.0:
                 last_log = now
                 med = float(np.median(errs[-30:])) if errs else -1
-                log(f"[crypto] t={now-t0:.0f}s fps={frames/(now-t0):.1f} ball=({ball[0]:.0f},{ball[1]:.0f}) paddle={paddle if paddle is None else round(paddle)} target={target:.0f} track_err={med:.0f}px lost={lost}")
+                log(f"[crypto] t={now-t0:.0f}s fps={frames/(now-t0):.1f} ball=({ball[0]:.0f},{ball[1]:.0f}) paddle={paddle if paddle is None else round(paddle)} target={target:.0f} track_err={med:.0f}px bricks={len(bricks)} aimed={aimed}")
         log(f"[crypto] time up: frames={frames} launches={launches} moves={moves} lost={lost}")
         img, _ = _frame(d)
         return img is None
