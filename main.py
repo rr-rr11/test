@@ -137,12 +137,33 @@ def click_card(d, name):
     return False
 
 
-def click_rel(d, fx, fy):
-    c = d.find_element(By.CSS_SELECTOR, "canvas")
-    d.execute_script("arguments[0].scrollIntoView({block:'center'});", c)
+JS_GEOM = ("const e=document.querySelector('canvas');if(!e)return null;const c=e.getBoundingClientRect();"
+           "return [c.left,c.top,c.width,c.height];")
+
+
+def click_rel_cdp(d, fx, fy):
+    """کلیک با CDP؛ برای canvasهای بلند (مثل Hamster Climber) که نقطه‌ی هدف بیرون از صفحه‌ی دید می‌افتد."""
+    d.execute_script("const c=document.querySelector('canvas');const r=c.getBoundingClientRect();"
+                     "window.scrollBy(0, r.top + arguments[0]*r.height - window.innerHeight/2);", fy)
     time.sleep(0.5)
-    w, h = c.size["width"], c.size["height"]
-    ActionChains(d).move_to_element_with_offset(c, int(fx * w - w / 2), int(fy * h - h / 2)).click().perform()
+    left, top, w, h = d.execute_script(JS_GEOM)
+    x, y = left + fx * w, top + fy * h
+    for kind in ("mouseMoved", "mousePressed", "mouseReleased"):
+        d.execute_cdp_cmd("Input.dispatchMouseEvent", dict(
+            type=kind, x=x, y=y, button="none" if kind == "mouseMoved" else "left", clickCount=1))
+        time.sleep(0.05)
+
+
+def click_rel(d, fx, fy):
+    try:
+        c = d.find_element(By.CSS_SELECTOR, "canvas")
+        d.execute_script("arguments[0].scrollIntoView({block:'center'});", c)
+        time.sleep(0.5)
+        w, h = c.size["width"], c.size["height"]
+        ActionChains(d).move_to_element_with_offset(c, int(fx * w - w / 2), int(fy * h - h / 2)).click().perform()
+    except Exception as e:
+        log(f"click_rel fallback to CDP ({type(e).__name__})")
+        click_rel_cdp(d, fx, fy)
 
 
 def page_text(d):
